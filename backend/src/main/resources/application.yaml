@@ -25,3 +25,12 @@ management:
     web:
       exposure:
         include: health,info,metrics
+
+app:
+  openai:
+    api-key: ${OPENAI_API_KEY}
+    chat-model: gpt-4o-mini              # hızlı ve uygun maliyetli model
+    embedding-model: text-embedding-3-small
+
+  chroma:
+    url: ${CHROMA_URL:http://localhost:8000}  # RAG (vektör veritabanı) için
