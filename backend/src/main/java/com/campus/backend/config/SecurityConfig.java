@@ -17,6 +17,7 @@ public class SecurityConfig {
                         .requestMatchers(
                                 "/api/ai/**",
                                 "/hello",
+                                "/api/etl/**",
                                 "/actuator/**",
                                 "/favicon.ico",
                                 "/error",

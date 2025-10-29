@@ -18,7 +18,7 @@ services:
       retries: 10
 
   chroma:
-    image: chromadb/chroma:0.5.11
+    image: chromadb/chroma:0.4.24
     container_name: campus_chroma
     environment:
       IS_PERSISTENT: "TRUE"
