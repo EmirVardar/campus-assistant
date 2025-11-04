@@ -34,3 +34,8 @@ app:
 
   chroma:
     url: ${CHROMA_URL:http://localhost:8000}  # RAG (vektör veritabanı) için
+
+# application.yaml
+jwt:
+  secret: ${JWT_SECRET}        # .env / ortam değişkeninden gelir
+  exp-min: ${JWT_EXP_MIN:60}   # dakikayla süre (varsayılan 60)
