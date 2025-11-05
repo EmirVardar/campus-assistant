@@ -69,4 +69,44 @@ public class EmbeddingService {
         map.setVectorId(vid);
         mapRepo.save(map);
     }
+    // Kopyalayıp EmbeddingService.java içine (indexAnnouncement metodunun altına) ekle
+
+    @SuppressWarnings("unchecked")
+    public List<DocumentMatch> findRelevantDocuments(String query, int topK) {
+        // 1. Kullanıcının sorusunu (query) vektöre çevir
+        Response<Embedding> response = embeddingModel.embed(query);
+        List<Float> vector = response.content().vectorAsList();
+
+        // 2. ChromaClient'taki yeni query metodunu kullanarak arama yap
+        Map<?, ?> queryResult = chroma.query(vector, topK);
+
+        // 3. Chroma'dan gelen karmaşık Map yanıtını parse et
+        List<DocumentMatch> matches = new java.util.ArrayList<>();
+
+        // Chroma her zaman [0] index'inde bir liste içinde liste döndürür
+        List<List<String>> docLists = (List<List<String>>) queryResult.get("documents");
+        List<List<Map<String, Object>>> metaLists = (List<List<Map<String, Object>>>) queryResult.get("metadatas");
+        List<List<Double>> distLists = (List<List<Double>>) queryResult.get("distances");
+
+        // Sonuç yoksa boş liste dön
+        if (docLists == null || docLists.isEmpty()) {
+            return matches;
+        }
+
+        // Biz tek sorgu attığımız için ilk ([0]) listedeki sonuçları al
+        List<String> docs = docLists.get(0);
+        List<Map<String, Object>> metas = metaLists.get(0);
+        List<Double> dists = distLists.get(0);
+
+        // 4. Sonuçları temiz DocumentMatch listesine çevir
+        for (int i = 0; i < docs.size(); i++) {
+            matches.add(new DocumentMatch(
+                    docs.get(i),
+                    metas.get(i),
+                    dists.get(i)
+            ));
+        }
+
+        return matches;
+    }
 }

@@ -101,7 +101,33 @@ public class ChromaClient {
                 .doOnNext(res -> System.out.println("Chroma upsert OK: " + res))
                 .block();
     }
+    /**
+     * Vektörel arama yapar.
+     * @param queryEmbedding Arama yapılacak embedding
+     * @param nResults İstenen sonuç sayısı (top-k)
+     * @return Chroma'dan dönen ham Map cevabı
+     */
+    public Map<?, ?> query(List<Float> queryEmbedding, int nResults) {
+        ensureCollectionIdLazily(); // ID'nin varlığından emin ol
 
+        Map<String, Object> body = Map.of(
+                // Chroma, sorgu listesi bekler, biz tek sorgu atıyoruz
+                "query_embeddings", List.of(queryEmbedding),
+                "n_results", nResults,
+                // Bize metin, metadata ve benzerlik skoru lazım
+                "include", List.of("metadatas", "documents", "distances")
+        );
+
+        return wc().post()
+                .uri("/api/v1/collections/{id}/query", this.collectionId)
+                .bodyValue(body)
+                .retrieve()
+                .onStatus(s -> s.is4xxClientError() || s.is5xxServerError(),
+                        resp -> resp.bodyToMono(String.class).map(msg ->
+                                new RuntimeException("Chroma query HTTP " + resp.statusCode() + ": " + msg)))
+                .bodyToMono(Map.class)
+                .block();
+    }
     // ------------------- INTERNAL HELPERS -------------------
 
     /** ensure POST cevabından ID’yi esnek şekilde çıkar. */

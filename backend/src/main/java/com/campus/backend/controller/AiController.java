@@ -1,34 +1,35 @@
 // YENİ HALİ (DOĞRU)
 package com.campus.backend.controller;
 
-import dev.langchain4j.model.chat.ChatLanguageModel;
+// GEREKLİ IMPORT'LAR
+import com.campus.backend.dto.ChatRequest;    // Adım 4.4'te oluşturduk
+import com.campus.backend.dto.ChatResponse;   // Adım 4.4'te oluşturduk
+import com.campus.backend.service.AiService;  // Adım 4.3'te oluşturduk
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-// 1. ADIM: Gelen JSON'ı karşılamak için bir 'record' tanımladık.
-// React Native'den gelecek {"message": "..."} objesi buna dönüşecek.
-// Bunu sınıfın DIŞINA, ama aynı dosyaya koyabilirsin.
-record ChatRequest(String message) {}
-
 @RestController
-@RequestMapping("/api/ai")
+@RequestMapping("/api/v1/ai") // Senin projen /api/ai kullanıyorsa /api/v1/ai olarak güncelleyebilirsin
 @RequiredArgsConstructor
 public class AiController {
 
-    private final ChatLanguageModel chatModel;
+    // 1. ADIM: Artık 'ChatLanguageModel' DEĞİL, 'AiService' (RAG Zinciri) inject ediliyor
+    private final AiService aiService;
 
-    @GetMapping("/ping")
-    public String ping() {
-        return chatModel.generate("You are a concise assistant. Reply with a one-line greeting.");
-    }
+    /**
+     * Sprint 4: RAG Chat Endpoint'i
+     * @param request Kullanıcının sorusunu içeren JSON body ({ "query": "..." })
+     * @return Yapay zekanın RAG ile ürettiği cevap ({ "answer": "..." })
+     */
+    @PostMapping("/chat")
+    public ResponseEntity<ChatResponse> chatWithRag(@RequestBody ChatRequest request) {
 
-    // 2. ADIM: Metodun imzasını güncelledik
-    @PostMapping(value = "/chat") // <-- 'consumes = "text/plain"' kısmını SİLDİK.
-    // Artık varsayılan olarak JSON (application/json) kabul edecek.
-    public String chat(@RequestBody ChatRequest request) { // <-- Parametreyi 'String userMessage' yerine 'ChatRequest request' yaptık.
-        // Spring Boot gelen JSON'ı otomatik olarak bu objeye dolduracak.
+        // 2. ADIM: İstek, 'AiService' (RAG zincirimiz) içindeki 'getAiResponse' metoduna yönlendiriliyor
+        // Artık 'chatModel.generate' ÇAĞIRMIYORUZ.
+        String response = aiService.getAiResponse(request.getQuery());
 
-        // 3. ADIM: Mesajı 'request' objesinden aldık.
-        return chatModel.generate(request.message());
+        // 3. ADIM: Cevabı 'ChatResponse' DTO'su ile paketliyoruz
+        return ResponseEntity.ok(new ChatResponse(response));
     }
 }
