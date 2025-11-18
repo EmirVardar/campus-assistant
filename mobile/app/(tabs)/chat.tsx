@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,82 +8,94 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  StyleSheet, // StyleSheet import ediyoruz
-  SafeAreaView, // Ekranın üst kısmıyla çakışmayı önler
-} from "react-native";
-import { Stack } from "expo-router";
-import { Ionicons } from "@expo/vector-icons"; // İkonlar için
+  StyleSheet,
+} from 'react-native';
 
-type Msg = { id: string; role: "user" | "assistant" | "typing"; text: string };
+// DÜZELTME: SafeAreaView artık BURADAN alınmalı
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import { Stack } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../../context/AuthContext';
+
+type Msg = { id: string; role: 'user' | 'assistant' | 'typing'; text: string };
+
 const API_BASE = process.env.EXPO_PUBLIC_API_URL;
 
 export default function ChatTab() {
   const [messages, setMessages] = useState<Msg[]>([
-    { id: "sys", role: "assistant", text: "Merhaba! Bana bir şey yaz :)" },
+    { id: 'sys', role: 'assistant', text: 'Merhaba! Bana bir şey yaz :)' },
   ]);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const flatListRef = useRef<FlatList>(null); // FlatList'i kontrol etmek için ref
+  const flatListRef = useRef<FlatList>(null);
 
-  // Mesaj gönderildiğinde veya geldiğinde en alta kaydır
+  const { token, signOut } = useAuth();
+
+  // DÜZELTME: Eksik olan scroll fonksiyonu eklendi
   const scrollToBottom = () => {
     flatListRef.current?.scrollToEnd({ animated: true });
   };
 
   const sendMessage = async () => {
     const content = input.trim();
-    if (!content || !API_BASE || loading) return;
+    if (!content || !API_BASE || loading || !token) return;
 
-    const userMsg: Msg = { id: Date.now() + "-u", role: "user", text: content };
+    const userMsg: Msg = { id: Date.now() + '-u', role: 'user', text: content };
     setMessages((m) => [...m, userMsg]);
-    setInput("");
+    setInput('');
     setLoading(true);
 
-    // Yeni mesaj sonrası kaydırma
-    setTimeout(scrollToBottom, 100);
+    setTimeout(scrollToBottom, 100); // DÜZELTME: mesaj eklenince en alta kaydır
 
     try {
-      const res = await fetch(`${API_BASE}/api/ai/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: content }),
+      const res = await fetch(`${API_BASE}/api/v1/ai/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ query: content }),
       });
 
-      const ct = res.headers.get("content-type") || "";
-      let answer = "";
-      if (ct.includes("application/json")) {
+      const ct = res.headers.get('content-type') || '';
+      let answer = '';
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403) {
+          answer = "Oturum süresi doldu. Lütfen tekrar giriş yapın.";
+          await signOut();
+        } else {
+          answer = `Sunucu hatası: ${res.status}`;
+        }
+      } else if (ct.includes('application/json')) {
         const data = await res.json();
-        answer = data.answer ?? data.content ?? data.message ?? JSON.stringify(data);
+        answer = data.answer ?? 'Bir hata oluştu.';
       } else {
         answer = await res.text();
       }
 
-      const botMsg: Msg = { id: Date.now() + "-a", role: "assistant", text: answer };
-      setMessages((m) => [...m, botMsg]);
+      setMessages((m) => [...m, { id: Date.now() + '-a', role: 'assistant', text: answer }]);
     } catch (e: any) {
       setMessages((m) => [
         ...m,
-        { id: Date.now() + "-e", role: "assistant", text: "Hata: " + (e?.message ?? String(e)) },
+        { id: Date.now() + '-e', role: 'assistant', text: 'Hata: ' + (e?.message ?? String(e)) },
       ]);
     } finally {
       setLoading(false);
-      // Cevap sonrası kaydırma
       setTimeout(scrollToBottom, 100);
     }
   };
 
-  // "Yazıyor..." göstergesini de içeren memoized data
+  // DÜZELTME: typing bubble için data ayarlama
   const flatListData = useMemo(() => {
-    if (loading) {
-      return [...messages, { id: "typing", role: "typing", text: "..." }];
-    }
-    return messages;
+    return loading
+      ? [...messages, { id: 'typing', role: 'typing', text: '...' }]
+      : messages;
   }, [messages, loading]);
 
-  // Mesaj balonlarını render eden fonksiyon
   const renderItem = ({ item }: { item: Msg }) => {
-    // "Yazıyor..." göstergesi
-    if (item.role === "typing") {
+    if (item.role === 'typing') {
       return (
         <View style={[styles.bubble, styles.assistantBubble]}>
           <ActivityIndicator size="small" color="#FFFFFF" />
@@ -91,7 +103,8 @@ export default function ChatTab() {
       );
     }
 
-    const isUser = item.role === "user";
+    const isUser = item.role === 'user';
+
     return (
       <View
         style={[
@@ -105,9 +118,21 @@ export default function ChatTab() {
   };
 
   return (
-    // SafeAreaView, çentik (notch) gibi alanları hesaba katar
-    <SafeAreaView style={styles.container}>
-      <Stack.Screen options={{ title: "AI Chat" }} />
+    // DÜZELTME: edges={'top'} kullanıldı, bottom Safe Area kaldırıldı → boşluk sorunu çözülür
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <Stack.Screen
+        options={{
+          title: 'AI Chat',
+          headerRight: () => (
+            <TouchableOpacity onPress={signOut} style={{ marginRight: 15 }}>
+              <Ionicons name="log-out-outline" size={24} color="#9CA3AF" />
+            </TouchableOpacity>
+          ),
+          headerStyle: { backgroundColor: '#0b1220' },
+          headerTintColor: '#FFFFFF',
+          headerTitleStyle: { fontWeight: 'bold' },
+        }}
+      />
 
       <FlatList
         ref={flatListRef}
@@ -115,16 +140,14 @@ export default function ChatTab() {
         keyExtractor={(m) => m.id}
         renderItem={renderItem}
         contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        // İçerik değişiminde veya ilk açılışta en alta kaydır
         onContentSizeChange={scrollToBottom}
         onLayout={scrollToBottom}
       />
 
-      {/* Klavye açıldığında input alanını yukarı iter */}
+      {/* DÜZELTME: iOS'ta alttaki boşluğu kaldırmak için offset artırıldı */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0} // Header yüksekliği için offset
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 1 : 0}  // ← DÜZELTME
       >
         <View style={styles.inputContainer}>
           <TextInput
@@ -133,11 +156,12 @@ export default function ChatTab() {
             placeholder="Mesaj yaz..."
             placeholderTextColor="#9CA3AF"
             style={styles.input}
-            multiline // Çok satırlı input
+            multiline
           />
+
           <TouchableOpacity
             onPress={sendMessage}
-            disabled={loading || input.trim().length === 0} // Boşken veya yüklenirken butonu pasif yap
+            disabled={loading || input.trim().length === 0}
             style={[
               styles.sendButton,
               (loading || input.trim().length === 0) && styles.sendButtonDisabled,
@@ -146,7 +170,6 @@ export default function ChatTab() {
             {loading ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
-              // "Gönder" yazısı yerine ikon kullandık
               <Ionicons name="arrow-up" size={24} color="white" />
             )}
           </TouchableOpacity>
@@ -156,67 +179,67 @@ export default function ChatTab() {
   );
 }
 
-// Tüm stilleri tek bir yerde topladık
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#111827", // Ana arka plan
-  },
+  container: { flex: 1, backgroundColor: '#111827' },
+
   listContent: {
     paddingHorizontal: 12,
-    paddingBottom: 10, // Input alanı ile arasında boşluk
+    paddingBottom: 10,
     paddingTop: 10,
   },
+
   bubble: {
     padding: 14,
-    borderRadius: 20, // Daha yuvarlak köşeler
+    borderRadius: 20,
     marginBottom: 10,
-    maxWidth: "85%",
+    maxWidth: '85%',
   },
+
   userBubble: {
-    alignSelf: "flex-end",
-    backgroundColor: "#2563eb", // Kullanıcı balonu rengi
-    borderBottomRightRadius: 4, // "Kuyruk" efekti
+    alignSelf: 'flex-end',
+    backgroundColor: '#2563eb',
+    borderBottomRightRadius: 4,
   },
+
   assistantBubble: {
-    alignSelf: "flex-start",
-    backgroundColor: "#374151", // Asistan balonu rengi
-    borderBottomLeftRadius: 4, // "Kuyruk" efekti
+    alignSelf: 'flex-start',
+    backgroundColor: '#374151',
+    borderBottomLeftRadius: 4,
   },
-  bubbleText: {
-    color: "white",
-    fontSize: 16,
-  },
+
+  bubbleText: { color: 'white', fontSize: 16 },
+
+  // DÜZELTME: Alt boşluk sorunu için paddingVertical azaltıldı
   inputContainer: {
-    flexDirection: "row",
+    flexDirection: 'row',
     gap: 10,
-    alignItems: "flex-end", // Çok satırlı inputta hizalama için
+    alignItems: 'flex-end',
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: "#0b1220", // Input bar arka planı
+    paddingVertical: 6, // ← DÜZELTME
+    backgroundColor: '#0b1220',
     borderTopWidth: 1,
-    borderTopColor: "#1f2937",
+    borderTopColor: '#1f2937',
   },
+
   input: {
     flex: 1,
-    backgroundColor: "#1f2937",
-    color: "white",
-    borderRadius: 20, // Daha yuvarlak input
+    backgroundColor: '#1f2937',
+    color: 'white',
+    borderRadius: 20,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 10,
     fontSize: 16,
-    maxHeight: 120, // Inputun çok uzamasını engeller
+    maxHeight: 120,
   },
+
   sendButton: {
-    backgroundColor: "#10b981", // Gönder butonu rengi
+    backgroundColor: '#10B981',
     width: 44,
     height: 44,
-    borderRadius: 22, // Tam daire
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 2, // Input ile hizalamak için
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  sendButtonDisabled: {
-    opacity: 0.5,
-  },
+
+  sendButtonDisabled: { opacity: 0.5 },
 });

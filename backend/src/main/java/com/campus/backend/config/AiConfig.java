@@ -7,6 +7,7 @@ import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.client.WebClient; // Bunu ekle
 
 import java.time.Duration;
 
@@ -35,6 +36,15 @@ public class AiConfig {
                 .apiKey(apiKey)
                 .modelName(embeddingModel)
                 .timeout(Duration.ofSeconds(30))
+                .build();
+    }
+
+    // AŞAĞIDAKİ KISMI EKLE:
+    @Bean
+    public WebClient openAiAudioWebClient(WebClient.Builder builder) {
+        return builder
+                .baseUrl("https://api.openai.com/v1/audio") // Base URL burada
+                .codecs(configurer -> configurer.defaultCodecs().maxInMemorySize(16 * 1024 * 1024)) // 16MB Sınır burada
                 .build();
     }
 }

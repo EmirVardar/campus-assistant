@@ -29,8 +29,11 @@ management:
 app:
   openai:
     api-key: ${OPENAI_API_KEY}
-    chat-model: gpt-4o-mini              # hızlı ve uygun maliyetli model
+    chat-model: gpt-4o-mini
     embedding-model: text-embedding-3-small
+    transcription-model: whisper-1 # <-- YENİ
+    speech-model: tts-1            # <-- YENİ
+
 
   chroma:
     url: ${CHROMA_URL:http://localhost:8000}  # RAG (vektör veritabanı) için
