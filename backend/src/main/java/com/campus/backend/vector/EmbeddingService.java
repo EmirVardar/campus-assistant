@@ -68,6 +68,7 @@ public class EmbeddingService {
         map.setRecordId(a.getId());
         map.setVectorId(vid);
         mapRepo.save(map);
+
     }
     // Kopyalayıp EmbeddingService.java içine (indexAnnouncement metodunun altına) ekle
 
