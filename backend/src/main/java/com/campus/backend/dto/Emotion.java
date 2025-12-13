@@ -1,4 +1,10 @@
 package com.campus.backend.dto;
 
-public class Emotion {
+public enum Emotion {
+    HAPPY,
+    SAD,
+    ANGRY,
+    ANXIOUS,
+    NEUTRAL,
+    UNKNOWN
 }

@@ -1,6 +1,16 @@
 package com.campus.backend.dto;
 
-public record VoiceResponse(
-        String answerText,      // Ekranda görünecek yazı
-        String audioBase64      // Çalınacak ses verisi
-) {}
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class VoiceResponse {
+    private String answer;
+    @ToString.Exclude
+    private String audioBase64;
+    private Emotion emotion;
+}

@@ -1,8 +1,12 @@
 package com.campus.backend.controller;
 
-import com.campus.backend.dto.VoiceResponse;        // 2. Adımda oluşturduğumuz DTO
-import com.campus.backend.service.AiService;        // SENİN MEVCUT BEYNİN (LangChain)
-import com.campus.backend.service.OpenAiAudioService; // YENİ DUYULARIN (Whisper + TTS)
+import com.campus.backend.dto.VoiceResponse;
+import com.campus.backend.dto.Emotion;
+import com.campus.backend.service.AiService;
+import com.campus.backend.service.OpenAiAudioService;
+import com.campus.backend.service.EmotionService;
+import com.campus.backend.service.TtsTextSanitizer;
+
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -16,32 +20,40 @@ import java.util.Base64;
 public class VoiceController {
 
     private final OpenAiAudioService audioService;
-    private final AiService aiService; // Senin RAG yapını buraya bağlıyoruz
+    private final AiService aiService;
+    private final EmotionService emotionService;
+    private final TtsTextSanitizer ttsTextSanitizer;
 
-    // Spring, iki servisi de otomatik olarak buraya getirecek
-    public VoiceController(OpenAiAudioService audioService, AiService aiService) {
+    public VoiceController(OpenAiAudioService audioService,
+                           AiService aiService,
+                           EmotionService emotionService,
+                           TtsTextSanitizer ttsTextSanitizer) {
         this.audioService = audioService;
         this.aiService = aiService;
+        this.emotionService = emotionService;
+        this.ttsTextSanitizer = ttsTextSanitizer;
     }
 
     @PostMapping(value = "/ask", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<VoiceResponse> askWithVoice(@RequestParam("file") MultipartFile file) throws IOException {
 
-        // 1. KULAK (STT): Gelen ses dosyasını yazıya çevir
-        // "Sınavlar ne zaman?"
+        // 1) Ses -> Metin
         String userQuestion = audioService.transcribe(file);
 
-        // 2. BEYİN (LangChain): Senin mevcut zekana bu soruyu sor
-        // "Sınavlar 20 Kasım'da başlıyor."
-        String aiAnswer = aiService.getAiResponse(userQuestion);
+        // 2) Metin -> Duygu
+        Emotion emotion = emotionService.detectEmotion(userQuestion);
 
-        // 3. AĞIZ (TTS): Zekadan gelen metni tekrar sese çevir
-        byte[] audioBytes = audioService.synthesize(aiAnswer);
+        // 3) Soru + Duygu -> Cevap (RAG + AI)  -> UI'ya aynen dönecek
+        String aiAnswer = aiService.getAiResponse(userQuestion, emotion);
 
-        // 4. PAKETLEME: Sesi JSON içinde göndermek için Base64 yapıyoruz
+        // ✅ 4) TTS'ye giden metni temizle (link/kaynak okunmasın)
+        String ttsText = ttsTextSanitizer.sanitize(aiAnswer);
+
+        // 5) Temiz metni sese çevir
+        byte[] audioBytes = audioService.synthesize(ttsText);
         String base64Audio = Base64.getEncoder().encodeToString(audioBytes);
 
-        // 5. SONUÇ: Hem yazıyı hem sesi (hibrit) dönüyoruz
-        return ResponseEntity.ok(new VoiceResponse(aiAnswer, base64Audio));
+        // 6) Text + Ses + Emotion döndür (answer linkli olabilir, ses linksiz olacak)
+        return ResponseEntity.ok(new VoiceResponse(aiAnswer, base64Audio, emotion));
     }
 }

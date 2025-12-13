@@ -1,6 +1,5 @@
 package com.campus.backend.service;
 
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
@@ -17,11 +16,7 @@ public class OpenAiAudioService {
 
     private final WebClient webClient;
 
-    @Value("${app.openai.api-key}")
-    private String apiKey;
-
-    // DİKKAT: Artık Builder ile biz uğraşmıyoruz.
-    // Spring, AiConfig'de tanımladığın hazır 'openAiAudioWebClient'ı buraya getiriyor.
+    // YENİ: apiKey alanına artık gerek yok, header'ı AiConfig'te verdik
     public OpenAiAudioService(WebClient openAiAudioWebClient) {
         this.webClient = openAiAudioWebClient;
     }
@@ -33,15 +28,17 @@ public class OpenAiAudioService {
         builder.part("file", new ByteArrayResource(audioFile.getBytes()) {
             @Override
             public String getFilename() {
-                return audioFile.getOriginalFilename() != null ? audioFile.getOriginalFilename() : "audio.wav";
+                return audioFile.getOriginalFilename() != null
+                        ? audioFile.getOriginalFilename()
+                        : "audio.wav";
             }
         });
         builder.part("model", "whisper-1");
         builder.part("language", "tr");
 
         Map response = webClient.post()
-                .uri("/transcriptions") // Base URL config'de olduğu için sadece path yazıyoruz
-                .header("Authorization", "Bearer " + apiKey)
+                .uri("/v1/audio/transcriptions")              // YENİ: tam path
+                // YENİ: Authorization header yok, AiConfig'te defaultHeader olarak verildi
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(builder.build()))
                 .retrieve()
@@ -60,8 +57,8 @@ public class OpenAiAudioService {
         );
 
         return webClient.post()
-                .uri("/speech") // Base URL config'de var
-                .header("Authorization", "Bearer " + apiKey)
+                .uri("/v1/audio/speech")                      // YENİ: tam path
+                // YENİ: Authorization header yok, AiConfig'te defaultHeader olarak verildi
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(requestBody)
                 .retrieve()

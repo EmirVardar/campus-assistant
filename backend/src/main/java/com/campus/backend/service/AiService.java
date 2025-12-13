@@ -1,5 +1,6 @@
 package com.campus.backend.service;
 
+import com.campus.backend.dto.Emotion;
 import com.campus.backend.vector.DocumentMatch; // Yeni oluşturduğumuz record
 import com.campus.backend.vector.EmbeddingService; // Az önce güncellediğimiz servis
 import dev.langchain4j.model.chat.ChatLanguageModel; // AiConfig'den gelen bean
@@ -32,19 +33,8 @@ public class AiService {
 
     private final EmbeddingService embeddingService;
     private final ChatLanguageModel chatModel;
-
-    // ----- YENİ ALANLAR (Prompt'u dosyadan okumak için) -----
     private final Resource ragPromptResource; // Dosyayı tutacak
     private String promptTemplate; // Dosyadan okunan metni tutacak
-    // ----- YENİ ALANLAR BİTTİ -----
-
-
-    /**
-     * Sprint 4: Prompt Şablonu (SABİT METNİ SİLDİK)
-     */
-    // private static final String PROMPT_TEMPLATE = "..."; // <-- BU BLOK SİLİNDİ
-
-
     private static final double RELEVANCE_THRESHOLD = 0.6;
 
     // ----- YENİ CONSTRUCTOR -----
@@ -80,13 +70,18 @@ public class AiService {
      * @return Yapay zekadan gelen cevap.
      */
     public String getAiResponse(String userQuery) {
+        // Eski çağrıları bozmayalım diye UNKNOWN ile yeni metoda delegate ediyoruz
+        return getAiResponse(userQuery, Emotion.UNKNOWN);
+    }
+
+    public String getAiResponse(String userQuery, Emotion emotion) {
 
         // 1. "Embedding'lerden en alakalı 5 kaydın çekilmesi"
         List<DocumentMatch> matches = embeddingService.findRelevantDocuments(userQuery, 5);
 
         // 2. GUARDRAIL BLOĞU
         if (matches.isEmpty() || matches.get(0).distance() > RELEVANCE_THRESHOLD) {
-            return "Bu konuda bilgim bulunuyor. Lütfen sorunuzu duyurular veya öğrenci bilgileriyle ilgili olacak şekilde sorun.";
+            return "Bu konuda bilgim bulunmuyor. Lütfen sorunuzu duyurular veya öğrenci bilgileriyle ilgili olacak şekilde sorun.";
         }
 
         // 3. Context oluşturma
@@ -98,11 +93,13 @@ public class AiService {
                 })
                 .collect(Collectors.joining("\n---\n"));
 
-        // 4. Prompt Şablonunu context ve kullanıcı sorusuyla doldur
-        // DEĞİŞİKLİK: 'PROMPT_TEMPLATE' yerine 'this.promptTemplate' (dosyadan okunan) kullan
-        String finalPrompt = String.format(this.promptTemplate, context, userQuery);
+        // 4. Emotion değerini stringe çevir
+        String emotionValue = (emotion != null) ? emotion.name() : "UNKNOWN";
 
-        // 5. Zincirin son adımı
+        // 5. Prompt Şablonunu context + emotion + kullanıcı sorusuyla doldur
+        String finalPrompt = String.format(this.promptTemplate, context, emotionValue, userQuery);
+
+        // 6. Zincirin son adımı
         return chatModel.generate(finalPrompt);
     }
 }

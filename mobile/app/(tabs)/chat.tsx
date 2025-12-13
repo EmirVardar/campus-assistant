@@ -10,49 +10,70 @@ import {
   Platform,
   StyleSheet,
   Alert,
+  Linking,
 } from 'react-native';
 
-// Ses ve Dosya işlemleri
 import { Audio } from 'expo-av';
-// 💥 ÇÖZÜM BURADA: Hata veren writeAsStringAsync metodunu desteklemek için legacy API'yi kullan
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Clipboard from 'expo-clipboard';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 
-type Msg = { id: string; role: 'user' | 'assistant' | 'typing'; text: string };
+type Msg = {
+  id: string;
+  role: 'user' | 'assistant' | 'typing';
+  text: string;
+  urls?: string[]; // ✅ linkleri metinden ayrı saklayacağız
+};
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL;
 
+// DEV’de log, prod’da sessiz
+const dbg = (...args: any[]) => {
+  if (__DEV__) console.log(...args);
+};
+
+// Metinden URL yakala
+const extractUrls = (text: string): string[] => {
+  const matches = text.match(/https?:\/\/\S+/g);
+  if (!matches) return [];
+  return Array.from(new Set(matches.map(u => u.replace(/[),.]+$/g, ''))));
+};
+
+// Cevap metninden kaynak satırını + URL’leri temizle (üstte görünmesin)
+const stripSourcesAndUrls = (text: string): string => {
+  return text
+    .replace(/\s*Kaynaklar?:.*$/i, '') // "Kaynak:" veya "Kaynaklar:" ile başlayan SON kısmı kırp
+    .replace(/https?:\/\/\S+/g, '')    // güvenlik: URL kaldıysa sil
+    .trim();
+};
+
 export default function ChatTab() {
-  // --- STATE ---
   const [messages, setMessages] = useState<Msg>([
     { id: 'sys', role: 'assistant', text: 'Merhaba! Yazabilir veya konuşabilirsin 🎙️' },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Ses Kayıt
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [permissionResponse, requestPermission] = Audio.usePermissions();
 
   const flatListRef = useRef<FlatList>(null);
   const { token, signOut } = useAuth();
 
-  // --- YARDIMCI FONKSİYONLAR ---
-
   const scrollToBottom = () => {
     flatListRef.current?.scrollToEnd({ animated: true });
   };
 
-  const addMessage = (role: 'user' | 'assistant', text: string) => {
-    setMessages(m => [...m, { id: Date.now() + '-' + role[0], role, text }]);
+  const addMessage = (role: 'user' | 'assistant', text: string, urls?: string[]) => {
+    setMessages(m => [...m, { id: Date.now() + '-' + role[0], role, text, urls }]);
     setTimeout(scrollToBottom, 100);
   };
 
-  // 1. METİN GÖNDERME
+  // 1) TEXT
   const sendTextMessage = async () => {
     const content = input.trim();
     if (!content || !API_BASE || loading || !token) return;
@@ -66,7 +87,7 @@ export default function ChatTab() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ query: content }),
       });
@@ -79,7 +100,7 @@ export default function ChatTab() {
     }
   };
 
-  // 2. KAYIT BAŞLAT
+  // 2) START REC
   const startRecording = async () => {
     try {
       if (permissionResponse?.status !== 'granted') {
@@ -95,17 +116,17 @@ export default function ChatTab() {
         Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
       setRecording(recording);
-      console.log('Kayıt başladı');
+      dbg('Kayıt başladı');
     } catch {
       Alert.alert('Hata', 'Mikrofon başlatılamadı.');
     }
   };
 
-  // 3. KAYIT DURDUR
+  // 3) STOP REC
   const stopRecording = async () => {
     if (!recording) return;
 
-    console.log('Kayıt durduruluyor...');
+    dbg('Kayıt durduruluyor...');
     setRecording(null);
     await recording.stopAndUnloadAsync();
 
@@ -113,7 +134,7 @@ export default function ChatTab() {
     if (uri) sendVoiceToBackend(uri);
   };
 
-  // 4. BACKEND İSTEĞİ
+  // 4) VOICE -> BACKEND
   const sendVoiceToBackend = async (uri: string) => {
     if (!API_BASE || !token) return;
     setLoading(true);
@@ -122,50 +143,70 @@ export default function ChatTab() {
       const formData = new FormData();
       // @ts-ignore
       formData.append('file', {
-        uri: uri,
+        uri,
         type: 'audio/m4a',
         name: 'voice_message.m4a',
       });
 
-      console.log("Ses sunucuya gönderiliyor...");
+      dbg('Ses sunucuya gönderiliyor...');
+
       const res = await fetch(`${API_BASE}/api/voice/ask`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'multipart/form-data',
-          'Authorization': `Bearer ${token}`,
+          // ✅ FormData’da Content-Type'ı elle set ETME (boundary sorunu)
+          Authorization: `Bearer ${token}`,
         },
         body: formData,
       });
 
       if (res.status === 401 || res.status === 403) {
-        addMessage('assistant', "Oturum süresi doldu.");
+        addMessage('assistant', 'Oturum süresi doldu.');
         await signOut();
         return;
       }
-
       if (!res.ok) throw new Error('Sunucu hatası');
 
       const data = await res.json();
 
-      addMessage('assistant', data.answerText);
+      // ✅ Base64’ü ASLA loglama
+      dbg('VoiceResponse (safe):', {
+        answerLen: data?.answer?.length ?? 0,
+        emotion: data?.emotion,
+        audioBase64Len: data?.audioBase64?.length ?? 0,
+        hasAudio: Boolean(data?.audioBase64),
+      });
+
+      const answerText: string = data.answer ?? 'Cevap alınamadı.';
+      const emotion: string | undefined = data.emotion;
+
+      // ✅ Linkleri yakala
+      const urls = extractUrls(answerText);
+
+      // ✅ Üst metinden link ve kaynak satırını çıkar
+      const cleanedAnswer = stripSourcesAndUrls(answerText);
+
+      const fullText = emotion ? `${cleanedAnswer}\n\n[Duygu: ${emotion}]` : cleanedAnswer;
+
+      // ✅ urls artık metinden değil mesajdan gelecek
+      addMessage('assistant', fullText, urls);
 
       if (data.audioBase64) {
-        console.log("Ses verisi alındı, oynatılıyor...");
+        dbg('Ses verisi alındı (len=', data.audioBase64.length, ')');
         await playResponseAudio(data.audioBase64);
       }
     } catch (error: any) {
-      console.error("Hata:", error);
-      addMessage('assistant', 'Hata: ' + error.message);
+      console.error('Hata:', error);
+      addMessage('assistant', 'Hata: ' + (error?.message ?? String(error)));
     } finally {
       setLoading(false);
     }
   };
 
-  // 5. SES OYNATMA (NİHAİ ÇÖZÜM)
+  // 5) PLAY AUDIO
   const playResponseAudio = async (base64String: string) => {
     let sound: Audio.Sound | null = null;
+
     try {
-      // 1. Hoparlör Moduna Geçiş (KAYIT MODUNU KAPAT)
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
@@ -173,43 +214,28 @@ export default function ChatTab() {
         staysActiveInBackground: false,
       });
 
-      const uri = FileSystem.documentDirectory + "voice_response.mp3";
-
+      const uri = FileSystem.documentDirectory + 'voice_response.mp3';
       const cleanBase64 = base64String.replace(/\s/g, '');
 
-      // 2. DOSYAYA YAZMA (legacy API sayesinde artık çalışması bekleniyor)
-      await FileSystem.writeAsStringAsync(uri, cleanBase64, {
-        encoding: 'base64',
-      });
+      await FileSystem.writeAsStringAsync(uri, cleanBase64, { encoding: 'base64' });
+      dbg('Dosya hazır:', uri);
 
-      console.log("Dosya hazır:", uri);
+      ({ sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true, volume: 1.0 }));
 
-      // 3. Sesi Yükle ve Çal
-      ({ sound } = await Audio.Sound.createAsync(
-        { uri },
-        { shouldPlay: true, volume: 1.0 }
-      ));
-
-      // 4. Ses bittiğinde kaynağı serbest bırak
       sound.setOnPlaybackStatusUpdate((status) => {
         if (status.isLoaded && status.didJustFinish) {
           sound?.unloadAsync();
-          console.log("Ses çalma işlemi tamamlandı ve bellek serbest bırakıldı.");
+          dbg('Ses çalma tamamlandı, bellek serbest.');
         }
       });
 
       await sound.playAsync();
-      console.log("Ses çalıyor olmalı.");
+      dbg('Ses çalıyor.');
     } catch (error) {
-      console.error("SES ÇALMA HATASI KESİN:", error);
-      Alert.alert("Ses Hatası", "Ses oynatılamadı. Konsolu kontrol edin.");
-      // Hata durumunda da belleği serbest bırakmayı dene
+      console.error('SES ÇALMA HATASI:', error);
+      Alert.alert('Ses Hatası', 'Ses oynatılamadı. Konsolu kontrol edin.');
       if (sound) {
-        try {
-          await sound.unloadAsync();
-        } catch (e) {
-          console.warn("Ses serbest bırakılamadı:", e);
-        }
+        try { await sound.unloadAsync(); } catch {}
       }
     }
   };
@@ -226,14 +252,18 @@ export default function ChatTab() {
     } else {
       answer = await res.text();
     }
+
+    // İstersen text endpoint için de linkleri altta göstermek:
+    // const urls = extractUrls(answer);
+    // const cleaned = stripSourcesAndUrls(answer);
+    // addMessage('assistant', cleaned, urls);
+
     addMessage('assistant', answer);
   };
 
   // --- RENDER ---
   const flatListData = useMemo(() => {
-    return loading
-      ? [...messages, { id: 'typing', role: 'typing', text: '...' }]
-      : messages;
+    return loading ? [...messages, { id: 'typing', role: 'typing', text: '...' }] : messages;
   }, [messages, loading]);
 
   const renderItem = ({ item }: { item: Msg }) => {
@@ -244,10 +274,39 @@ export default function ChatTab() {
         </View>
       );
     }
+
     const isUser = item.role === 'user';
+    const urls = !isUser ? (item.urls ?? []) : []; // ✅ artık metinden çekmiyoruz
+
     return (
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
-        <Text style={styles.bubbleText}>{item.text}</Text>
+        <Text style={styles.bubbleText} selectable>
+          {item.text}
+        </Text>
+
+        {!isUser && urls.length > 0 && (
+          <View style={{ marginTop: 10 }}>
+            {urls.slice(0, 2).map((url) => (
+              <View key={url} style={{ marginTop: 6 }}>
+                <TouchableOpacity onPress={() => Linking.openURL(url)}>
+                  <Text style={styles.linkText} selectable>
+                    {url}
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={async () => {
+                    await Clipboard.setStringAsync(url);
+                    Alert.alert('Kopyalandı', 'Link panoya kopyalandı.');
+                  }}
+                  style={{ marginTop: 4 }}
+                >
+                  <Text style={styles.copyText}>Linki kopyala</Text>
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     );
   };
@@ -285,7 +344,7 @@ export default function ChatTab() {
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder={recording ? "Dinliyorum..." : "Mesaj yaz..."}
+            placeholder={recording ? 'Dinliyorum...' : 'Mesaj yaz...'}
             placeholderTextColor="#9CA3AF"
             style={styles.input}
             multiline
@@ -312,13 +371,13 @@ export default function ChatTab() {
               style={[
                 styles.micButton,
                 recording && styles.micButtonRecording,
-                loading && styles.sendButtonDisabled
+                loading && styles.sendButtonDisabled,
               ]}
             >
               {loading ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : (
-                <Ionicons name={recording ? "mic" : "mic-outline"} size={24} color="white" />
+                <Ionicons name={recording ? 'mic' : 'mic-outline'} size={24} color="white" />
               )}
             </TouchableOpacity>
           )}
@@ -329,13 +388,23 @@ export default function ChatTab() {
 }
 
 const styles = StyleSheet.create({
-  // Stil tanımlamaları... (değişmedi)
   container: { flex: 1, backgroundColor: '#111827' },
   listContent: { paddingHorizontal: 12, paddingBottom: 10, paddingTop: 10 },
   bubble: { padding: 14, borderRadius: 20, marginBottom: 10, maxWidth: '85%' },
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#2563eb', borderBottomRightRadius: 4 },
   assistantBubble: { alignSelf: 'flex-start', backgroundColor: '#374151', borderBottomLeftRadius: 4 },
   bubbleText: { color: 'white', fontSize: 16 },
+
+  linkText: {
+    color: '#93C5FD',
+    textDecorationLine: 'underline',
+    fontSize: 14,
+  },
+  copyText: {
+    color: '#E5E7EB',
+    fontSize: 13,
+    opacity: 0.85,
+  },
 
   inputContainer: {
     flexDirection: 'row',
@@ -368,7 +437,7 @@ const styles = StyleSheet.create({
   },
 
   micButton: {
-    backgroundColor: '#007AFF', // Mavi
+    backgroundColor: '#007AFF',
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -377,7 +446,7 @@ const styles = StyleSheet.create({
   },
 
   micButtonRecording: {
-    backgroundColor: '#EF4444', // Kırmızı
+    backgroundColor: '#EF4444',
     transform: [{ scale: 1.1 }],
   },
 
