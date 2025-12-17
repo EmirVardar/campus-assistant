@@ -11,6 +11,8 @@ import {
   StyleSheet,
   Alert,
   Linking,
+  Modal,
+  Pressable,
 } from 'react-native';
 
 import { Audio } from 'expo-av';
@@ -26,7 +28,9 @@ type Msg = {
   id: string;
   role: 'user' | 'assistant' | 'typing';
   text: string;
-  urls?: string[]; // ✅ linkleri metinden ayrı saklayacağız
+  urls?: string[];
+  feedback?: 'like' | 'dislike';
+  emotion?: string; // ✅ tekrar eklendi: modelin duygu çıktısı
 };
 
 const API_BASE = process.env.EXPO_PUBLIC_API_URL;
@@ -46,9 +50,16 @@ const extractUrls = (text: string): string[] => {
 // Cevap metninden kaynak satırını + URL’leri temizle (üstte görünmesin)
 const stripSourcesAndUrls = (text: string): string => {
   return text
-    .replace(/\s*Kaynaklar?:.*$/i, '') // "Kaynak:" veya "Kaynaklar:" ile başlayan SON kısmı kırp
-    .replace(/https?:\/\/\S+/g, '')    // güvenlik: URL kaldıysa sil
+    .replace(/\s*Kaynaklar?:.*$/i, '')
+    .replace(/https?:\/\/\S+/g, '')
     .trim();
+};
+
+const formatEmotion = (e?: string) => {
+  if (!e) return '';
+  const s = String(e).trim();
+  if (!s) return '';
+  return s.charAt(0).toUpperCase() + s.slice(1);
 };
 
 export default function ChatTab() {
@@ -64,13 +75,99 @@ export default function ChatTab() {
   const flatListRef = useRef<FlatList>(null);
   const { token, signOut } = useAuth();
 
+  // ✅ Feedback modal state
+  const [feedbackModalVisible, setFeedbackModalVisible] = useState(false);
+  const [feedbackTargetMsgId, setFeedbackTargetMsgId] = useState<string | null>(null);
+  const [selectedReasons, setSelectedReasons] = useState<Record<string, boolean>>({});
+
   const scrollToBottom = () => {
     flatListRef.current?.scrollToEnd({ animated: true });
   };
 
-  const addMessage = (role: 'user' | 'assistant', text: string, urls?: string[]) => {
-    setMessages(m => [...m, { id: Date.now() + '-' + role[0], role, text, urls }]);
+  const addMessage = (
+    role: 'user' | 'assistant',
+    text: string,
+    urls?: string[],
+    emotion?: string
+  ) => {
+    setMessages(m => [
+      ...m,
+      { id: Date.now() + '-' + role[0], role, text, urls, emotion },
+    ]);
     setTimeout(scrollToBottom, 100);
+  };
+
+  const markMessageFeedback = (msgId: string, feedback: 'like' | 'dislike') => {
+    setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, feedback } : m)));
+  };
+
+  const sendPreferenceFeedback = async (tags: string[]) => {
+    if (!API_BASE || !token) throw new Error('API veya token yok.');
+
+    const res = await fetch(`${API_BASE}/api/v1/preferences/feedback`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ tags }),
+    });
+
+    if (res.status === 401 || res.status === 403) {
+      Alert.alert('Oturum', 'Oturum süresi doldu.');
+      await signOut();
+      throw new Error('Unauthorized');
+    }
+    if (!res.ok) throw new Error(`Preference update failed: ${res.status}`);
+
+    return await res.json();
+  };
+
+  const reasonToTags = (reasons: Record<string, boolean>): string[] => {
+    const tags: string[] = [];
+
+    if (reasons.tooLong) tags.push('KISA_ISTIYORUM');
+    if (reasons.tooShort) tags.push('NORMAL_ISTIYORUM');
+
+    if (reasons.wantSources) tags.push('KAYNAK_ISTIYORUM');
+    if (reasons.noSources) tags.push('KAYNAK_ISTEMIYORUM');
+
+    if (reasons.wantSteps) tags.push('ADIM_ADIM');
+    if (reasons.noSteps) tags.push('FORMAT_DEFAULT');
+
+    if (reasons.wantTechnical) tags.push('TEKNIK_ANLAT');
+    if (reasons.wantSimple) tags.push('BASIT_ANLAT');
+
+    return tags;
+  };
+
+  const onLike = async (msgId: string) => {
+    markMessageFeedback(msgId, 'like');
+  };
+
+  const onDislikeOpen = (msgId: string) => {
+    setFeedbackTargetMsgId(msgId);
+    setSelectedReasons({});
+    setFeedbackModalVisible(true);
+  };
+
+  const onDislikeSubmit = async () => {
+    if (!feedbackTargetMsgId) return;
+
+    const tags = reasonToTags(selectedReasons);
+    if (tags.length === 0) {
+      Alert.alert('Seçim gerekli', 'En az bir neden seçmelisin.');
+      return;
+    }
+
+    try {
+      await sendPreferenceFeedback(tags);
+      markMessageFeedback(feedbackTargetMsgId, 'dislike');
+      setFeedbackModalVisible(false);
+      setFeedbackTargetMsgId(null);
+    } catch (e: any) {
+      Alert.alert('Hata', e?.message ?? String(e));
+    }
   };
 
   // 1) TEXT
@@ -153,7 +250,6 @@ export default function ChatTab() {
       const res = await fetch(`${API_BASE}/api/voice/ask`, {
         method: 'POST',
         headers: {
-          // ✅ FormData’da Content-Type'ı elle set ETME (boundary sorunu)
           Authorization: `Bearer ${token}`,
         },
         body: formData,
@@ -168,7 +264,6 @@ export default function ChatTab() {
 
       const data = await res.json();
 
-      // ✅ Base64’ü ASLA loglama
       dbg('VoiceResponse (safe):', {
         answerLen: data?.answer?.length ?? 0,
         emotion: data?.emotion,
@@ -177,18 +272,12 @@ export default function ChatTab() {
       });
 
       const answerText: string = data.answer ?? 'Cevap alınamadı.';
-      const emotion: string | undefined = data.emotion;
 
-      // ✅ Linkleri yakala
       const urls = extractUrls(answerText);
-
-      // ✅ Üst metinden link ve kaynak satırını çıkar
       const cleanedAnswer = stripSourcesAndUrls(answerText);
 
-      const fullText = emotion ? `${cleanedAnswer}\n\n[Duygu: ${emotion}]` : cleanedAnswer;
-
-      // ✅ urls artık metinden değil mesajdan gelecek
-      addMessage('assistant', fullText, urls);
+      // ✅ Duyguyu tekrar UI mesajına ekliyoruz
+      addMessage('assistant', cleanedAnswer, urls, data?.emotion);
 
       if (data.audioBase64) {
         dbg('Ses verisi alındı (len=', data.audioBase64.length, ')');
@@ -223,6 +312,7 @@ export default function ChatTab() {
       ({ sound } = await Audio.Sound.createAsync({ uri }, { shouldPlay: true, volume: 1.0 }));
 
       sound.setOnPlaybackStatusUpdate((status) => {
+        // @ts-ignore
         if (status.isLoaded && status.didJustFinish) {
           sound?.unloadAsync();
           dbg('Ses çalma tamamlandı, bellek serbest.');
@@ -243,22 +333,23 @@ export default function ChatTab() {
   const handleApiResponse = async (res: Response) => {
     const ct = res.headers.get('content-type') || '';
     let answer = '';
+    let emotion: string | undefined = undefined;
 
     if (!res.ok) {
       answer = `Hata: ${res.status}`;
     } else if (ct.includes('application/json')) {
       const data = await res.json();
       answer = data.answer ?? 'Cevap yok.';
+      emotion = data?.emotion; // ✅ text endpoint için duygu
     } else {
       answer = await res.text();
+      // text/plain dönerse emotion yok, boş kalır
     }
 
-    // İstersen text endpoint için de linkleri altta göstermek:
-    // const urls = extractUrls(answer);
-    // const cleaned = stripSourcesAndUrls(answer);
-    // addMessage('assistant', cleaned, urls);
+    const urls = extractUrls(answer);
+    const cleaned = stripSourcesAndUrls(answer);
 
-    addMessage('assistant', answer);
+    addMessage('assistant', cleaned, urls, emotion);
   };
 
   // --- RENDER ---
@@ -276,13 +367,27 @@ export default function ChatTab() {
     }
 
     const isUser = item.role === 'user';
-    const urls = !isUser ? (item.urls ?? []) : []; // ✅ artık metinden çekmiyoruz
+    const urls = !isUser ? (item.urls ?? []) : [];
+
+    const canFeedback = !isUser && item.role === 'assistant' && item.id !== 'sys';
+    const feedbackDisabled = Boolean(item.feedback);
+
+    const showEmotion = !isUser && item.role === 'assistant' && item.id !== 'sys' && Boolean(item.emotion);
 
     return (
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
         <Text style={styles.bubbleText} selectable>
           {item.text}
         </Text>
+
+        {/* ✅ Duygu etiketi */}
+        {showEmotion && (
+          <View style={{ marginTop: 8 }}>
+            <Text style={styles.emotionText}>
+              Duygu: {formatEmotion(item.emotion)}
+            </Text>
+          </View>
+        )}
 
         {!isUser && urls.length > 0 && (
           <View style={{ marginTop: 10 }}>
@@ -305,6 +410,32 @@ export default function ChatTab() {
                 </TouchableOpacity>
               </View>
             ))}
+          </View>
+        )}
+
+        {canFeedback && (
+          <View style={{ flexDirection: 'row', gap: 14, marginTop: 10, alignItems: 'center' }}>
+            <TouchableOpacity
+              disabled={feedbackDisabled}
+              onPress={() => onLike(item.id)}
+              style={{ opacity: feedbackDisabled ? 0.35 : 1 }}
+            >
+              <Ionicons name="thumbs-up-outline" size={20} color="#E5E7EB" />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              disabled={feedbackDisabled}
+              onPress={() => onDislikeOpen(item.id)}
+              style={{ opacity: feedbackDisabled ? 0.35 : 1 }}
+            >
+              <Ionicons name="thumbs-down-outline" size={20} color="#E5E7EB" />
+            </TouchableOpacity>
+
+            {item.feedback && (
+              <Text style={{ color: '#9CA3AF', fontSize: 12 }}>
+                Geri bildirim alındı
+              </Text>
+            )}
           </View>
         )}
       </View>
@@ -335,6 +466,58 @@ export default function ChatTab() {
         onContentSizeChange={scrollToBottom}
         onLayout={scrollToBottom}
       />
+
+      {/* ✅ Dislike Modal */}
+      <Modal
+        visible={feedbackModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setFeedbackModalVisible(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', padding: 20 }}>
+          <View style={{ backgroundColor: '#111827', borderRadius: 16, padding: 16 }}>
+            <Text style={{ color: 'white', fontSize: 16, marginBottom: 10 }}>
+              Neden kötüydü?
+            </Text>
+
+            {[
+              { key: 'tooLong', label: 'Çok uzundu' },
+              { key: 'tooShort', label: 'Çok kısaydı' },
+              { key: 'wantSteps', label: 'Adım adım olsun' },
+              { key: 'noSteps', label: 'Adım adım olmasın' },
+              { key: 'wantTechnical', label: 'Daha teknik olsun' },
+              { key: 'wantSimple', label: 'Daha basit olsun' },
+              { key: 'wantSources', label: 'Kaynak istiyorum' },
+              { key: 'noSources', label: 'Kaynak istemiyorum' },
+            ].map(opt => (
+              <Pressable
+                key={opt.key}
+                onPress={() =>
+                  setSelectedReasons(prev => ({ ...prev, [opt.key]: !prev[opt.key] }))
+                }
+                style={{ paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+              >
+                <Ionicons
+                  // @ts-ignore
+                  name={selectedReasons[opt.key] ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color="#E5E7EB"
+                />
+                <Text style={{ color: 'white' }}>{opt.label}</Text>
+              </Pressable>
+            ))}
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
+              <TouchableOpacity onPress={() => setFeedbackModalVisible(false)}>
+                <Text style={{ color: '#9CA3AF' }}>İptal</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onDislikeSubmit}>
+                <Text style={{ color: '#10B981', fontWeight: '600' }}>Gönder</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -394,6 +577,12 @@ const styles = StyleSheet.create({
   userBubble: { alignSelf: 'flex-end', backgroundColor: '#2563eb', borderBottomRightRadius: 4 },
   assistantBubble: { alignSelf: 'flex-start', backgroundColor: '#374151', borderBottomLeftRadius: 4 },
   bubbleText: { color: 'white', fontSize: 16 },
+
+  emotionText: {
+    color: '#D1D5DB',
+    fontSize: 12,
+    opacity: 0.95,
+  },
 
   linkText: {
     color: '#93C5FD',

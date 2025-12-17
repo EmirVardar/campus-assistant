@@ -1,10 +1,7 @@
 package com.campus.backend.service;
 
 import com.campus.backend.dto.Emotion;
-import com.campus.backend.entity.AnswerFormat;
-import com.campus.backend.entity.Tone;
-import com.campus.backend.entity.UserPreference;
-import com.campus.backend.entity.Verbosity;
+import com.campus.backend.entity.*;
 import com.campus.backend.vector.DocumentMatch;
 import com.campus.backend.vector.EmbeddingService;
 import dev.langchain4j.model.chat.ChatLanguageModel;
@@ -28,21 +25,26 @@ public class AiService {
     private final EmbeddingService embeddingService;
     private final ChatLanguageModel chatModel;
     private final UserPreferenceService userPreferenceService;
+    private final ConversationMemoryService conversationMemoryService;
 
     private final Resource ragPromptResource;
     private String promptTemplate;
 
     private static final double RELEVANCE_THRESHOLD = 0.6;
+    private static final int HISTORY_LIMIT = 10;
+    private static final String DEFAULT_CONVERSATION_KEY = "default";
 
     public AiService(
             EmbeddingService embeddingService,
             ChatLanguageModel chatModel,
             UserPreferenceService userPreferenceService,
+            ConversationMemoryService conversationMemoryService,
             @Value("classpath:prompts/rag-template.txt") Resource ragPromptResource
     ) {
         this.embeddingService = embeddingService;
         this.chatModel = chatModel;
         this.userPreferenceService = userPreferenceService;
+        this.conversationMemoryService = conversationMemoryService;
         this.ragPromptResource = ragPromptResource;
     }
 
@@ -61,52 +63,108 @@ public class AiService {
 
     public String getAiResponse(String userQuery, Emotion emotion) {
 
-        // 0) Preference oku
+        // 0) userId + conversation
+        Long userId = resolveCurrentUserIdOrNull();
+        Conversation conversation = null;
+        String historyBlock = "";
+
+        if (userId != null) {
+            conversation = conversationMemoryService.getOrCreate(userId, DEFAULT_CONVERSATION_KEY);
+            var history = conversationMemoryService.getLastMessages(conversation.getId(), HISTORY_LIMIT);
+            historyBlock = formatHistory(history);
+        }
+
+        // 1) Preference oku
         UserPreference pref = resolveCurrentUserPreferenceOrNull();
         boolean citationsEnabled = (pref != null) && pref.isCitations();
 
-        // 1) RAG match
+        // 2) Eğer kullanıcı “konuşma geçmişi” soruyorsa RAG guardrail’e takılma
+        boolean memoryQuestion = isConversationMemoryQuery(userQuery);
+        if (memoryQuestion) {
+            String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion);
+
+            String memoryPrompt =
+                    preferencePolicy + "\n\n" +
+                            "KONUŞMA GEÇMİŞİ (yalnızca bağlam içindir; burada yazmayanı uydurma):\n" +
+                            (historyBlock.isBlank() ? "(Geçmiş yok)\n" : historyBlock + "\n") +
+                            "\nKullanıcı sorusu:\n" + userQuery + "\n\n" +
+                            "Kurallar:\n" +
+                            "- Yalnızca KONUŞMA GEÇMİŞİ'nde geçenlere dayan.\n" +
+                            "- Geçmişte yoksa açıkça 'Bu konuşmada bunu göremiyorum' de.\n" +
+                            "- Türkçe, kısa ve net yaz.\n";
+
+            String answerRaw = chatModel.generate(memoryPrompt);
+            if (answerRaw == null) answerRaw = "";
+
+            // Kaydet (history temiz kalsın)
+            if (conversation != null) {
+                conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
+                conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, stripSourcesSection(answerRaw));
+            }
+
+            return stripSourcesSection(answerRaw).trim();
+        }
+
+        // 3) RAG match
         List<DocumentMatch> matches = embeddingService.findRelevantDocuments(userQuery, 5);
 
-        // 2) Guardrail
+        // 4) Guardrail (duyuruda yoksa)
         if (matches.isEmpty() || matches.get(0).distance() > RELEVANCE_THRESHOLD) {
+            // Yine de mesajları kaydedelim ki diyalog akışı bozulmasın
+            if (conversation != null) {
+                conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
+                conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT,
+                        "Bu bilgi duyurularda geçmiyor. İstersen duyurunun başlığını veya linkini paylaşırsan birlikte netleştirebilirim.");
+            }
             return "Bu bilgi duyurularda geçmiyor. İstersen duyurunun başlığını veya linkini paylaşırsan birlikte netleştirebilirim.";
         }
 
-        // ✅ 3) Citations açıksa tek duyuru kullan (tek kaynak doğru olsun)
+        // ✅ 5) Citations açıksa tek duyuru kullan
         List<DocumentMatch> usedMatches = citationsEnabled ? matches.subList(0, 1) : matches;
 
-        // 4) Context: duyuru metni (URL'leri prompt içine gömmüyoruz)
+        // 6) Context: duyuru metni
         String context = usedMatches.stream()
                 .map(m -> "Duyuru: " + m.text())
                 .collect(Collectors.joining("\n---\n"));
 
-        // 5) Policy (preference + emotion)
-        String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion);
+        // 7) Policy (preference + emotion)
+        String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion)
+                + "\n- Not: Konuşma geçmişi yalnızca bağlam içindir; gerçek bilgi için BAĞLAM'a dayan.\n";
 
-        // 6) Template
+        // 8) Template
         String emotionValue = (emotion != null) ? emotion.name() : "UNKNOWN";
         String ragPrompt = String.format(this.promptTemplate, context, emotionValue, userQuery);
 
-        // 7) Final prompt
-        String finalPrompt = preferencePolicy + "\n\n" + ragPrompt;
+        // 9) Final prompt (history + rag)
+        String finalPrompt =
+                preferencePolicy + "\n\n" +
+                        "KONUŞMA GEÇMİŞİ (bağlam):\n" +
+                        (historyBlock.isBlank() ? "(Geçmiş yok)\n" : historyBlock + "\n") +
+                        "\n" + ragPrompt;
 
-        // 8) Generate
+        // 10) Generate
         String answer = chatModel.generate(finalPrompt);
         if (answer == null) answer = "";
 
-        // 9) Model kaynak üretirse çakışmasın diye temizle
-        answer = stripSourcesSection(answer).trim();
+        // 11) Model kaynak üretirse temizle
+        String answerForMemory = stripSourcesSection(answer).trim();
 
-        // ✅ 10) Citations ON ise tek kaynak ekle
+        // 12) User’a dönecek cevap (citations ON ise tek kaynak ekle)
+        String answerToUser = answerForMemory;
         if (citationsEnabled) {
-            answer = appendSingleSource(answer, usedMatches);
+            answerToUser = appendSingleSource(answerToUser, usedMatches);
         }
 
-        return answer.trim();
+        // 13) DB’ye yaz (assistant cevabı “Kaynak:” satırı olmadan)
+        if (conversation != null) {
+            conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
+            conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, answerForMemory);
+        }
+
+        return answerToUser.trim();
     }
 
-    private UserPreference resolveCurrentUserPreferenceOrNull() {
+    private Long resolveCurrentUserIdOrNull() {
         try {
             var auth = SecurityContextHolder.getContext().getAuthentication();
             if (auth == null || auth.getPrincipal() == null) return null;
@@ -114,11 +172,55 @@ public class AiService {
             String principal = auth.getPrincipal().toString();
             if (principal == null || principal.isBlank()) return null;
 
-            Long userId = Long.valueOf(principal);
+            return Long.valueOf(principal);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private UserPreference resolveCurrentUserPreferenceOrNull() {
+        try {
+            Long userId = resolveCurrentUserIdOrNull();
+            if (userId == null) return null;
             return userPreferenceService.getOrCreate(userId);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private String formatHistory(List<ConversationMessage> history) {
+        if (history == null || history.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (ConversationMessage m : history) {
+            String role = (m.getRole() == ConversationMessageRole.USER) ? "Kullanıcı" : "Asistan";
+            String content = (m.getContent() == null) ? "" : m.getContent().trim();
+
+            // Prompt şişmesin diye basit bir kırpma (istersen limitleri arttırırız)
+            if (content.length() > 1500) {
+                content = content.substring(0, 1500) + " ...";
+            }
+
+            sb.append(role).append(": ").append(content).append("\n");
+        }
+        return sb.toString().trim();
+    }
+
+    private boolean isConversationMemoryQuery(String q) {
+        if (q == null) return false;
+        String s = q.toLowerCase();
+
+        return s.contains("az önce") ||
+                s.contains("daha önce") ||
+                s.contains("ne demiştim") ||
+                s.contains("ne demiştin") ||
+                s.contains("ne söyledin") ||
+                s.contains("ne söylemiştim") ||
+                s.contains("hatırlıyor musun") ||
+                s.contains("bir önceki mesaj") ||
+                s.contains("önceki mesaj") ||
+                s.contains("önceki cevabın") ||
+                s.contains("bana ne cevap verdin") ||
+                s.contains("bu konuşmada");
     }
 
     private String buildPreferenceAndEmotionPolicy(UserPreference pref, Emotion emotion) {
@@ -141,7 +243,7 @@ public class AiService {
             sb.append("- Ton: basit ve anlaşılır; jargon kullanma.\n");
         }
 
-        // Emotion (yumuşak, opsiyonel)
+        // Emotion
         String e = (emotion != null) ? emotion.name() : "UNKNOWN";
         switch (e) {
             case "ANXIOUS" -> sb.append("- Duygu: endişeli. İstersen en fazla 1 kısa, sakinleştirici cümle ekle; sonra doğrudan bilgi ver.\n");
@@ -162,7 +264,7 @@ public class AiService {
 
         // Format
         if (format == AnswerFormat.STEP_BY_STEP) {
-            sb.append("- Format: adım adım. Kısa numaralı adımlar kullan (1) değil, '1)' formatında).\n");
+            sb.append("- Format: adım adım. Kısa numaralı adımlar kullan ('1)' formatında).\n");
             sb.append("- Adım numaraları yalnızca satır başında olmalı.\n");
         } else {
             sb.append("- Format: normal paragraf. Liste zorunlu değil.\n");
@@ -181,12 +283,8 @@ public class AiService {
     private String stripSourcesSection(String answer) {
         if (answer == null) return "";
 
-        // Cevabın neresinde olursa olsun "Kaynak:" / "Kaynaklar:" satırlarını temizle
         String cleaned = answer.replaceAll("(?im)^\\s*Kaynaklar?\\s*:\\s*.*$", "");
-
-        // Boş satırları toparla
         cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
-
         return cleaned.trim();
     }
 
