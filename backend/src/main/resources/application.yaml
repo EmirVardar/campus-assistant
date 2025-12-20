@@ -33,8 +33,18 @@ app:
     embedding-model: text-embedding-3-small
     transcription-model: whisper-1 # <-- YENİ
     speech-model: tts-1            # <-- YENİ
-
-
+  etl:
+    cs-sakarya:
+      test-mode: false   # false = tüm sayfalar, true = sadece ilk sayfa
+      max-pages: 200     # güvenlik üst sınır
+      sleep-ms: 300      # istekler arası bekleme
+    ogrwebmail-sss:
+      base-url: https://ogrwebmail.sakarya.edu.tr
+      menu-url: https://ogrwebmail.sakarya.edu.tr   # ana sayfa da olur (menü orada)
+      category-ids: "2,13,14,15,7,4,3,5,16"
+      test-mode: false
+      max-items: 2000
+      sleep-ms: 200
   chroma:
     url: ${CHROMA_URL:http://localhost:8000}  # RAG (vektör veritabanı) için
 
