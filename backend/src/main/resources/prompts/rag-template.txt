@@ -1,11 +1,20 @@
-BAĞLAM (üniversite duyuruları):
+BAĞLAM (üniversite duyuruları - referans bilgi):
 %s
 
 Kullanıcının duygusal durumu (etiket): %s
+
 Kullanıcı sorusu:
 %s
 
-Zorunlu kurallar:
-- Yanıtı yalnızca BAĞLAM'daki bilgilere dayandır.
-- Tahmin/uydurma yapma.
+Görev:
+- BAĞLAM'daki bilgileri anlayıp öğrencinin sorusuna doğal Türkçe ile cevap ver.
+- Duyuruyu kelimesi kelimesine KOPYALAMA; bilgiyi sadeleştir ve açıklayarak anlat.
+- BAĞLAM'da açıkça yazmayan konularda kesin hüküm verme.
+  - Gerekirse "Genelde/çoğu durumda" gibi ihtiyatlı ifadelerle kısa bir yorum ekle.
+  - Belirsizlik varsa kullanıcıdan 1 netleştirici soru sor.
+
+Kurallar:
+- Cevap "arama motoru" gibi madde madde duyuru dökümü olmasın; kısa, konuşur gibi olsun.
+- BAĞLAM ile çelişen bir bilgi verme.
+- Uydurma tarih, link, birim adı üretme.
 - Türkçe yaz.

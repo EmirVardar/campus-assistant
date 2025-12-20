@@ -30,7 +30,9 @@ public class AiService {
     private final Resource ragPromptResource;
     private String promptTemplate;
 
-    private static final double RELEVANCE_THRESHOLD = 0.6;
+    // Distance metriği için daha toleranslı threshold
+    private static final double RELEVANCE_THRESHOLD = 0.75;
+
     private static final int HISTORY_LIMIT = 10;
     private static final String DEFAULT_CONVERSATION_KEY = "default";
 
@@ -63,7 +65,7 @@ public class AiService {
 
     public String getAiResponse(String userQuery, Emotion emotion) {
 
-        // 0) userId + conversation
+        // 0) userId + conversation + history
         Long userId = resolveCurrentUserIdOrNull();
         Conversation conversation = null;
         String historyBlock = "";
@@ -78,7 +80,7 @@ public class AiService {
         UserPreference pref = resolveCurrentUserPreferenceOrNull();
         boolean citationsEnabled = (pref != null) && pref.isCitations();
 
-        // 2) Eğer kullanıcı “konuşma geçmişi” soruyorsa RAG guardrail’e takılma
+        // 2) Eğer kullanıcı “konuşma geçmişi” soruyorsa RAG guardrail’e takılma (mevcut yaklaşım doğru)
         boolean memoryQuestion = isConversationMemoryQuery(userQuery);
         if (memoryQuestion) {
             String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion);
@@ -96,7 +98,6 @@ public class AiService {
             String answerRaw = chatModel.generate(memoryPrompt);
             if (answerRaw == null) answerRaw = "";
 
-            // Kaydet (history temiz kalsın)
             if (conversation != null) {
                 conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
                 conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, stripSourcesSection(answerRaw));
@@ -105,31 +106,39 @@ public class AiService {
             return stripSourcesSection(answerRaw).trim();
         }
 
-        // 3) RAG match
-        List<DocumentMatch> matches = embeddingService.findRelevantDocuments(userQuery, 5);
+        // 3) RAG match (topK artırıldı)
+        List<DocumentMatch> matches = embeddingService.findRelevantDocuments(userQuery, 8);
 
-        // 4) Guardrail (duyuruda yoksa)
-        if (matches.isEmpty() || matches.get(0).distance() > RELEVANCE_THRESHOLD) {
-            // Yine de mesajları kaydedelim ki diyalog akışı bozulmasın
+        // 4) Guardrail: sadece ilk elemana bakma; “iyi” eşleşme var mı kontrol et
+        boolean hasRelevant = matches != null && matches.stream()
+                .anyMatch(m -> m != null && m.distance() <= RELEVANCE_THRESHOLD);
+
+        if (!hasRelevant) {
+            String fallback =
+                    "Bu soru için duyurularda net bir bilgi bulamadım. " +
+                            "Eğer duyurunun başlığını veya linkini paylaşırsan birlikte kesinleştirebilirim.";
+
             if (conversation != null) {
                 conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
-                conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT,
-                        "Bu bilgi duyurularda geçmiyor. İstersen duyurunun başlığını veya linkini paylaşırsan birlikte netleştirebilirim.");
+                conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, fallback);
             }
-            return "Bu bilgi duyurularda geçmiyor. İstersen duyurunun başlığını veya linkini paylaşırsan birlikte netleştirebilirim.";
+            return fallback;
         }
 
-        // ✅ 5) Citations açıksa tek duyuru kullan
-        List<DocumentMatch> usedMatches = citationsEnabled ? matches.subList(0, 1) : matches;
+        // 5) Citations ON ise: kullanıcıya 1 kaynak göstereceğiz ama modele daha zengin bağlam verelim
+        List<DocumentMatch> usedForPrompt = matches; // modele hepsi gitsin
+        List<DocumentMatch> usedForCitations = citationsEnabled ? pickBestForCitation(matches) : List.of();
 
-        // 6) Context: duyuru metni
-        String context = usedMatches.stream()
-                .map(m -> "Duyuru: " + m.text())
-                .collect(Collectors.joining("\n---\n"));
+        // 6) Context: duyuru metni (+ url)
+        String context = usedForPrompt.stream()
+                .filter(m -> m != null)
+                .map(this::formatMatchForContext)
+                .collect(Collectors.joining("\n\n---\n\n"));
 
-        // 7) Policy (preference + emotion)
+        // 7) Policy (preference + emotion + memory usage)
         String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion)
-                + "\n- Not: Konuşma geçmişi yalnızca bağlam içindir; gerçek bilgi için BAĞLAM'a dayan.\n";
+                + "\n- Not: Konuşma geçmişi diyaloğu sürdürmek içindir; BAĞLAM ise referans bilgidir.\n"
+                + "- BAĞLAM'ı kelimesi kelimesine kopyalama; sadeleştirip yorumlayarak anlat.\n";
 
         // 8) Template
         String emotionValue = (emotion != null) ? emotion.name() : "UNKNOWN";
@@ -152,7 +161,7 @@ public class AiService {
         // 12) User’a dönecek cevap (citations ON ise tek kaynak ekle)
         String answerToUser = answerForMemory;
         if (citationsEnabled) {
-            answerToUser = appendSingleSource(answerToUser, usedMatches);
+            answerToUser = appendSingleSource(answerToUser, usedForCitations);
         }
 
         // 13) DB’ye yaz (assistant cevabı “Kaynak:” satırı olmadan)
@@ -164,13 +173,41 @@ public class AiService {
         return answerToUser.trim();
     }
 
+    // --- helpers ---
+
+    private String formatMatchForContext(DocumentMatch m) {
+        String url = null;
+        try {
+            Object u = (m.metadata() != null) ? m.metadata().get("url") : null;
+            url = (u != null) ? u.toString() : null;
+        } catch (Exception ignored) {
+        }
+
+        String text = (m.text() == null) ? "" : m.text().trim();
+        if (text.length() > 2500) {
+            text = text.substring(0, 2500) + " ...";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("DUYURU METNİ:\n").append(text);
+        if (url != null && !url.isBlank()) {
+            sb.append("\nDUYURU URL: ").append(url.trim());
+        }
+        return sb.toString();
+    }
+
+    private List<DocumentMatch> pickBestForCitation(List<DocumentMatch> matches) {
+        if (matches == null || matches.isEmpty()) return List.of();
+        return List.of(matches.get(0));
+    }
+
     private Long resolveCurrentUserIdOrNull() {
         try {
             var auth = SecurityContextHolder.getContext().getAuthentication();
             if (auth == null || auth.getPrincipal() == null) return null;
 
             String principal = auth.getPrincipal().toString();
-            if (principal == null || principal.isBlank()) return null;
+            if (principal.isBlank()) return null;
 
             return Long.valueOf(principal);
         } catch (Exception e) {
@@ -191,17 +228,19 @@ public class AiService {
     private String formatHistory(List<ConversationMessage> history) {
         if (history == null || history.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
+
         for (ConversationMessage m : history) {
             String role = (m.getRole() == ConversationMessageRole.USER) ? "Kullanıcı" : "Asistan";
             String content = (m.getContent() == null) ? "" : m.getContent().trim();
 
-            // Prompt şişmesin diye basit bir kırpma (istersen limitleri arttırırız)
-            if (content.length() > 1500) {
-                content = content.substring(0, 1500) + " ...";
+            // ✅ Prompt şişmesini azaltmak için daha agresif kırpma
+            if (content.length() > 600) {
+                content = content.substring(0, 600) + " ...";
             }
 
             sb.append(role).append(": ").append(content).append("\n");
         }
+
         return sb.toString().trim();
     }
 
@@ -233,8 +272,14 @@ public class AiService {
         StringBuilder sb = new StringBuilder();
         sb.append("Yanıt politikası:\n");
         sb.append("- Türkçe yaz.\n");
-        sb.append("- BAĞLAM dışına çıkma, uydurma yapma.\n");
+        sb.append("- BAĞLAM ile çelişme; ancak BAĞLAM'ı aynen kopyalama, sadeleştirip yorumlayarak anlat.\n");
         sb.append("- Gereksiz tekrar yapma.\n");
+
+        // ✅ CHATGPT HİSSİ: hafıza kullanım kuralları
+        sb.append("- Konuşma geçmişini diyaloğu sürdürmek için kullan: kullanıcının önceki niyetini, verdiği detayları hatırla.\n");
+        sb.append("- Konuşma geçmişindeki bilgiler BAĞLAM ile çelişirse BAĞLAM'ı esas al ve bunu kibarca belirt.\n");
+        sb.append("- Kullanıcı geçmişte bölüm/sınıf/tarih/ders adı gibi bilgi verdiyse cevapta dikkate al.\n");
+        sb.append("- Gerekli bilgi yoksa 1 netleştirici soru sor.\n");
 
         // Tone
         if (tone == Tone.TECHNICAL) {
@@ -246,9 +291,9 @@ public class AiService {
         // Emotion
         String e = (emotion != null) ? emotion.name() : "UNKNOWN";
         switch (e) {
-            case "ANXIOUS" -> sb.append("- Duygu: endişeli. İstersen en fazla 1 kısa, sakinleştirici cümle ekle; sonra doğrudan bilgi ver.\n");
+            case "ANXIOUS" -> sb.append("- Duygu: endişeli. En fazla 1 kısa, sakinleştirici cümle ekleyebilirsin; sonra bilgi ver.\n");
             case "ANGRY" -> sb.append("- Duygu: kızgın. Kısa, net ve çözüm odaklı yaz; gerilimi artırma.\n");
-            case "SAD" -> sb.append("- Duygu: üzgün. Nazik ve destekleyici ol; abartılı terapötik söylem kullanma.\n");
+            case "SAD" -> sb.append("- Duygu: üzgün. Nazik ve destekleyici ol; terapötik söylem kullanma.\n");
             case "HAPPY" -> sb.append("- Duygu: mutlu. Olumlu ama abartısız yaz.\n");
             case "NEUTRAL" -> sb.append("- Duygu: nötr. Profesyonel ama sıcak, net bilgilendir.\n");
             default -> sb.append("- Duygu: bilinmiyor. Standart, kibar ve net yaz.\n");
@@ -282,7 +327,6 @@ public class AiService {
 
     private String stripSourcesSection(String answer) {
         if (answer == null) return "";
-
         String cleaned = answer.replaceAll("(?im)^\\s*Kaynaklar?\\s*:\\s*.*$", "");
         cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
         return cleaned.trim();
@@ -291,13 +335,16 @@ public class AiService {
     private String appendSingleSource(String answer, List<DocumentMatch> usedMatches) {
         String url = null;
         if (usedMatches != null && !usedMatches.isEmpty()) {
-            url = (String) usedMatches.get(0).metadata().get("url");
+            try {
+                Object u = usedMatches.get(0).metadata().get("url");
+                url = (u != null) ? u.toString() : null;
+            } catch (Exception ignored) {
+            }
         }
 
         if (url == null || url.isBlank()) {
             return answer + "\n\nKaynak: Kaynak belirtilmemiş";
         }
-
         return answer + "\n\nKaynak: " + url.trim();
     }
 }
