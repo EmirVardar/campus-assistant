@@ -33,10 +33,13 @@ public class AiService {
     private String promptTemplate;
 
     private static final double RELEVANCE_THRESHOLD = 0.75;
-    private static final int HISTORY_LIMIT = 10;
+
+    // Öneri: 10 yerine 6 daha stabil oluyor (konu değişiminde gürültüyü azaltır)
+    private static final int HISTORY_LIMIT = 6;
+
     private static final String DEFAULT_CONVERSATION_KEY = "default";
 
-    // ✅ Modelin döndürdüğü kaynak satırını yakalamak için
+    // Modelin döndürdüğü kaynak satırını yakalamak için
     private static final Pattern USED_SOURCE_PATTERN =
             Pattern.compile("(?im)^\\s*KULLANILAN_KAYNAK\\s*:\\s*(S\\d+|YOK)\\s*$");
 
@@ -70,19 +73,21 @@ public class AiService {
     public String getAiResponse(String userQuery, Emotion emotion) {
 
         Long userId = resolveCurrentUserIdOrNull();
+
         Conversation conversation = null;
         String historyBlock = "";
+        List<ConversationMessage> history = List.of();
 
         if (userId != null) {
             conversation = conversationMemoryService.getOrCreate(userId, DEFAULT_CONVERSATION_KEY);
-            var history = conversationMemoryService.getLastMessages(conversation.getId(), HISTORY_LIMIT);
+            history = conversationMemoryService.getLastMessages(conversation.getId(), HISTORY_LIMIT);
             historyBlock = formatHistory(history);
         }
 
         UserPreference pref = resolveCurrentUserPreferenceOrNull();
         boolean citationsEnabled = (pref != null) && pref.isCitations();
 
-        // 1) Konuşma hafızası soruları
+        // 1) Konuşma hafızası soruları (az önce ne dedim vs.)
         boolean memoryQuestion = isConversationMemoryQuery(userQuery);
         if (memoryQuestion) {
             String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion);
@@ -110,8 +115,9 @@ public class AiService {
             return cleanedForUser;
         }
 
-        // 2) RAG
-        List<DocumentMatch> matches = embeddingService.findRelevantDocuments(userQuery, 8);
+        // 2) RAG ARAMASI (KRİTİK FIX: takip sorularında query’yi history ile güçlendir)
+        String ragQuery = buildRagQuery(userQuery, history);
+        List<DocumentMatch> matches = embeddingService.findRelevantDocuments(ragQuery, 8);
 
         boolean hasRelevant = matches != null && matches.stream()
                 .anyMatch(m -> m != null && m.distance() <= RELEVANCE_THRESHOLD);
@@ -128,7 +134,7 @@ public class AiService {
             return fallback;
         }
 
-        // ✅ 3) Prompt’a yalnızca threshold altı duyuruları koy (sapmayı azaltır)
+        // 3) Prompt’a yalnızca threshold altı duyuruları koy (sapmayı azaltır)
         List<DocumentMatch> usedForPrompt = matches.stream()
                 .filter(m -> m != null && m.distance() <= RELEVANCE_THRESHOLD)
                 .collect(Collectors.toList());
@@ -157,19 +163,19 @@ public class AiService {
         String rawAnswer = chatModel.generate(finalPrompt);
         if (rawAnswer == null) rawAnswer = "";
 
-        // ✅ 5) Modelin seçtiği SOURCE_ID’yi yakala
+        // 5) Modelin seçtiği SOURCE_ID’yi yakala
         String usedSourceId = extractUsedSourceId(rawAnswer); // S1, S2, ... veya YOK
 
-        // ✅ 6) Kullanıcıya gösterilecek metni temizle (internal + kaynak satırları)
+        // 6) Kullanıcıya gösterilecek metni temizle (internal + kaynak satırları)
         String answerForUser = stripInternalAndSources(rawAnswer).trim();
 
-        // ✅ 7) Doğru linki bas (citationsEnabled ise)
+        // 7) Doğru linki bas (citationsEnabled ise)
         if (citationsEnabled) {
             String url = resolveUrlBySourceId(usedSourceId, usedForPrompt);
             answerForUser = appendResolvedSource(answerForUser, url);
         }
 
-        // ✅ 8) DB’ye kaydet (temiz hali)
+        // 8) DB’ye kaydet (temiz hali)
         if (conversation != null) {
             conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
             conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, answerForUser);
@@ -178,7 +184,67 @@ public class AiService {
         return answerForUser;
     }
 
-    // ---- SOURCE_ID helpers ----
+    // -------------------------
+    // RAG QUERY HELPERS (NEW)
+    // -------------------------
+
+    private boolean isFollowUpQuery(String q) {
+        if (q == null) return false;
+        String s = q.trim().toLowerCase();
+        if (s.isBlank()) return false;
+
+        int wc = s.split("\\s+").length;
+        if (wc <= 5) return true;
+
+        return s.contains("tarih")
+                || s.contains("ne zaman")
+                || s.contains("son gün")
+                || s.contains("başvuru")
+                || s.contains("şart")
+                || s.contains("koşul")
+                || s.contains("ücret")
+                || s.contains("link")
+                || s.contains("nereden")
+                || s.contains("hangi")
+                || s.startsWith("peki")
+                || s.startsWith("ee")
+                || s.startsWith("tamam");
+    }
+
+    private String buildRagQuery(String userQuery, List<ConversationMessage> history) {
+        if (!isFollowUpQuery(userQuery)) return userQuery;
+        if (history == null || history.isEmpty()) return userQuery;
+
+        String lastUser = "";
+        String lastAssistant = "";
+
+        for (int i = history.size() - 1; i >= 0; i--) {
+            var m = history.get(i);
+            if (m.getRole() == ConversationMessageRole.ASSISTANT && lastAssistant.isBlank()) {
+                lastAssistant = safeClip(m.getContent(), 200);
+            } else if (m.getRole() == ConversationMessageRole.USER && lastUser.isBlank()) {
+                lastUser = safeClip(m.getContent(), 120);
+            }
+            if (!lastUser.isBlank() && !lastAssistant.isBlank()) break;
+        }
+
+        String hint = (lastUser + " " + lastAssistant).trim();
+        if (hint.isBlank()) return userQuery;
+
+        // Bu sayede: "peki tarihi ne zaman?" -> "UMDE ... peki tarihi ne zaman?" gibi aratır.
+        return hint + " " + userQuery;
+    }
+
+    private String safeClip(String s, int max) {
+        if (s == null) return "";
+        s = s.trim();
+        if (s.length() <= max) return s;
+        return s.substring(0, max);
+    }
+
+    // -------------------------
+    // SOURCE_ID helpers
+    // -------------------------
 
     private String buildContextWithSourceIds(List<DocumentMatch> matches) {
         StringBuilder sb = new StringBuilder();
@@ -213,7 +279,6 @@ public class AiService {
         if (m.find()) {
             return m.group(1).trim(); // S2 veya YOK
         }
-        // Model bazen satırı unutabilir; bu durumda null dön
         return null;
     }
 
@@ -221,7 +286,6 @@ public class AiService {
         if (sourceId == null || sourceId.isBlank()) return null;
         if ("YOK".equalsIgnoreCase(sourceId.trim())) return null;
 
-        // S# -> index
         int idx;
         try {
             idx = Integer.parseInt(sourceId.substring(1)) - 1;
@@ -248,7 +312,9 @@ public class AiService {
         return answer + "\n\nKaynak: " + url.trim();
     }
 
-    // ---- other helpers ----
+    // -------------------------
+    // Other helpers (unchanged)
+    // -------------------------
 
     private Long resolveCurrentUserIdOrNull() {
         try {
@@ -356,11 +422,10 @@ public class AiService {
         } else {
             sb.append("- Kaynaklar: URL veya 'Kaynaklar' bölümü ekleme.\n");
         }
-
         return sb.toString();
     }
 
-    // ✅ Kullanıcıya gösterilmeyecek satırları temizler:
+    // Kullanıcıya gösterilmeyecek satırları temizler:
     // - KULLANILAN_KAYNAK: ...
     // - Kaynak: ... (model yazarsa)
     private String stripInternalAndSources(String answer) {
