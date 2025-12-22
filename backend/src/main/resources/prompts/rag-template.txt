@@ -18,3 +18,10 @@ Kurallar:
 - BAĞLAM ile çelişen bir bilgi verme.
 - Uydurma tarih, link, birim adı üretme.
 - Türkçe yaz.
+
+Kaynak kuralı (zorunlu):
+- Cevabın EN SON satırına, tek satır olarak şunu ekle:
+  KULLANILAN_KAYNAK: S#
+  (Ör: KULLANILAN_KAYNAK: S2)
+- Eğer BAĞLAM'dan hiçbir kaynak kullanamadıysan:
+  KULLANILAN_KAYNAK: YOK

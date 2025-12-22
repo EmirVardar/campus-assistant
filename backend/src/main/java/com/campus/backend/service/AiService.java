@@ -17,6 +17,8 @@ import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -30,11 +32,13 @@ public class AiService {
     private final Resource ragPromptResource;
     private String promptTemplate;
 
-    // Distance metriği için daha toleranslı threshold
     private static final double RELEVANCE_THRESHOLD = 0.75;
-
     private static final int HISTORY_LIMIT = 10;
     private static final String DEFAULT_CONVERSATION_KEY = "default";
+
+    // ✅ Modelin döndürdüğü kaynak satırını yakalamak için
+    private static final Pattern USED_SOURCE_PATTERN =
+            Pattern.compile("(?im)^\\s*KULLANILAN_KAYNAK\\s*:\\s*(S\\d+|YOK)\\s*$");
 
     public AiService(
             EmbeddingService embeddingService,
@@ -65,7 +69,6 @@ public class AiService {
 
     public String getAiResponse(String userQuery, Emotion emotion) {
 
-        // 0) userId + conversation + history
         Long userId = resolveCurrentUserIdOrNull();
         Conversation conversation = null;
         String historyBlock = "";
@@ -76,11 +79,10 @@ public class AiService {
             historyBlock = formatHistory(history);
         }
 
-        // 1) Preference oku
         UserPreference pref = resolveCurrentUserPreferenceOrNull();
         boolean citationsEnabled = (pref != null) && pref.isCitations();
 
-        // 2) Eğer kullanıcı “konuşma geçmişi” soruyorsa RAG guardrail’e takılma (mevcut yaklaşım doğru)
+        // 1) Konuşma hafızası soruları
         boolean memoryQuestion = isConversationMemoryQuery(userQuery);
         if (memoryQuestion) {
             String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion);
@@ -98,18 +100,19 @@ public class AiService {
             String answerRaw = chatModel.generate(memoryPrompt);
             if (answerRaw == null) answerRaw = "";
 
+            String cleanedForUser = stripInternalAndSources(answerRaw).trim();
+
             if (conversation != null) {
                 conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
-                conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, stripSourcesSection(answerRaw));
+                conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, cleanedForUser);
             }
 
-            return stripSourcesSection(answerRaw).trim();
+            return cleanedForUser;
         }
 
-        // 3) RAG match (topK artırıldı)
+        // 2) RAG
         List<DocumentMatch> matches = embeddingService.findRelevantDocuments(userQuery, 8);
 
-        // 4) Guardrail: sadece ilk elemana bakma; “iyi” eşleşme var mı kontrol et
         boolean hasRelevant = matches != null && matches.stream()
                 .anyMatch(m -> m != null && m.distance() <= RELEVANCE_THRESHOLD);
 
@@ -125,81 +128,127 @@ public class AiService {
             return fallback;
         }
 
-        // 5) Citations ON ise: kullanıcıya 1 kaynak göstereceğiz ama modele daha zengin bağlam verelim
-        List<DocumentMatch> usedForPrompt = matches; // modele hepsi gitsin
-        List<DocumentMatch> usedForCitations = citationsEnabled ? pickBestForCitation(matches) : List.of();
+        // ✅ 3) Prompt’a yalnızca threshold altı duyuruları koy (sapmayı azaltır)
+        List<DocumentMatch> usedForPrompt = matches.stream()
+                .filter(m -> m != null && m.distance() <= RELEVANCE_THRESHOLD)
+                .collect(Collectors.toList());
 
-        // 6) Context: duyuru metni (+ url)
-        String context = usedForPrompt.stream()
-                .filter(m -> m != null)
-                .map(this::formatMatchForContext)
-                .collect(Collectors.joining("\n\n---\n\n"));
+        if (usedForPrompt.isEmpty()) {
+            // fallback: en iyi 2 duyuru
+            usedForPrompt = matches.stream().filter(m -> m != null).limit(2).collect(Collectors.toList());
+        }
 
-        // 7) Policy (preference + emotion + memory usage)
+        // 4) Context: SOURCE_ID ile ver
+        String context = buildContextWithSourceIds(usedForPrompt);
+
         String preferencePolicy = buildPreferenceAndEmotionPolicy(pref, emotion)
                 + "\n- Not: Konuşma geçmişi diyaloğu sürdürmek içindir; BAĞLAM ise referans bilgidir.\n"
                 + "- BAĞLAM'ı kelimesi kelimesine kopyalama; sadeleştirip yorumlayarak anlat.\n";
 
-        // 8) Template
         String emotionValue = (emotion != null) ? emotion.name() : "UNKNOWN";
         String ragPrompt = String.format(this.promptTemplate, context, emotionValue, userQuery);
 
-        // 9) Final prompt (history + rag)
         String finalPrompt =
                 preferencePolicy + "\n\n" +
                         "KONUŞMA GEÇMİŞİ (bağlam):\n" +
                         (historyBlock.isBlank() ? "(Geçmiş yok)\n" : historyBlock + "\n") +
                         "\n" + ragPrompt;
 
-        // 10) Generate
-        String answer = chatModel.generate(finalPrompt);
-        if (answer == null) answer = "";
+        String rawAnswer = chatModel.generate(finalPrompt);
+        if (rawAnswer == null) rawAnswer = "";
 
-        // 11) Model kaynak üretirse temizle
-        String answerForMemory = stripSourcesSection(answer).trim();
+        // ✅ 5) Modelin seçtiği SOURCE_ID’yi yakala
+        String usedSourceId = extractUsedSourceId(rawAnswer); // S1, S2, ... veya YOK
 
-        // 12) User’a dönecek cevap (citations ON ise tek kaynak ekle)
-        String answerToUser = answerForMemory;
+        // ✅ 6) Kullanıcıya gösterilecek metni temizle (internal + kaynak satırları)
+        String answerForUser = stripInternalAndSources(rawAnswer).trim();
+
+        // ✅ 7) Doğru linki bas (citationsEnabled ise)
         if (citationsEnabled) {
-            answerToUser = appendSingleSource(answerToUser, usedForCitations);
+            String url = resolveUrlBySourceId(usedSourceId, usedForPrompt);
+            answerForUser = appendResolvedSource(answerForUser, url);
         }
 
-        // 13) DB’ye yaz (assistant cevabı “Kaynak:” satırı olmadan)
+        // ✅ 8) DB’ye kaydet (temiz hali)
         if (conversation != null) {
             conversationMemoryService.append(conversation, ConversationMessageRole.USER, userQuery);
-            conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, answerForMemory);
+            conversationMemoryService.append(conversation, ConversationMessageRole.ASSISTANT, answerForUser);
         }
 
-        return answerToUser.trim();
+        return answerForUser;
     }
 
-    // --- helpers ---
+    // ---- SOURCE_ID helpers ----
 
-    private String formatMatchForContext(DocumentMatch m) {
-        String url = null;
-        try {
-            Object u = (m.metadata() != null) ? m.metadata().get("url") : null;
-            url = (u != null) ? u.toString() : null;
-        } catch (Exception ignored) {
-        }
-
-        String text = (m.text() == null) ? "" : m.text().trim();
-        if (text.length() > 2500) {
-            text = text.substring(0, 2500) + " ...";
-        }
-
+    private String buildContextWithSourceIds(List<DocumentMatch> matches) {
         StringBuilder sb = new StringBuilder();
-        sb.append("DUYURU METNİ:\n").append(text);
-        if (url != null && !url.isBlank()) {
-            sb.append("\nDUYURU URL: ").append(url.trim());
+        for (int i = 0; i < matches.size(); i++) {
+            DocumentMatch m = matches.get(i);
+            String sid = "S" + (i + 1);
+
+            String url = "";
+            String title = "";
+            try {
+                Object u = (m.metadata() != null) ? m.metadata().get("url") : null;
+                url = (u != null) ? u.toString() : "";
+                Object t = (m.metadata() != null) ? m.metadata().get("title") : null;
+                title = (t != null) ? t.toString() : "";
+            } catch (Exception ignored) {}
+
+            String text = (m.text() == null) ? "" : m.text().trim();
+            if (text.length() > 2500) text = text.substring(0, 2500) + " ...";
+
+            sb.append("SOURCE_ID: ").append(sid).append("\n");
+            if (!title.isBlank()) sb.append("TITLE: ").append(title).append("\n");
+            sb.append("URL: ").append(url).append("\n");
+            sb.append("TEXT:\n").append(text).append("\n");
+
+            if (i < matches.size() - 1) sb.append("\n---\n\n");
         }
         return sb.toString();
     }
 
-    private List<DocumentMatch> pickBestForCitation(List<DocumentMatch> matches) {
-        if (matches == null || matches.isEmpty()) return List.of();
-        return List.of(matches.get(0));
+    private String extractUsedSourceId(String rawAnswer) {
+        Matcher m = USED_SOURCE_PATTERN.matcher(rawAnswer);
+        if (m.find()) {
+            return m.group(1).trim(); // S2 veya YOK
+        }
+        // Model bazen satırı unutabilir; bu durumda null dön
+        return null;
     }
+
+    private String resolveUrlBySourceId(String sourceId, List<DocumentMatch> usedForPrompt) {
+        if (sourceId == null || sourceId.isBlank()) return null;
+        if ("YOK".equalsIgnoreCase(sourceId.trim())) return null;
+
+        // S# -> index
+        int idx;
+        try {
+            idx = Integer.parseInt(sourceId.substring(1)) - 1;
+        } catch (Exception e) {
+            return null;
+        }
+
+        if (idx < 0 || idx >= usedForPrompt.size()) return null;
+
+        try {
+            Object u = usedForPrompt.get(idx).metadata().get("url");
+            String url = (u != null) ? u.toString() : null;
+            if (url == null || url.isBlank()) return null;
+            return url.trim();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String appendResolvedSource(String answer, String url) {
+        if (url == null || url.isBlank()) {
+            return answer + "\n\nKaynak: Kaynak belirtilmemiş";
+        }
+        return answer + "\n\nKaynak: " + url.trim();
+    }
+
+    // ---- other helpers ----
 
     private Long resolveCurrentUserIdOrNull() {
         try {
@@ -228,26 +277,18 @@ public class AiService {
     private String formatHistory(List<ConversationMessage> history) {
         if (history == null || history.isEmpty()) return "";
         StringBuilder sb = new StringBuilder();
-
         for (ConversationMessage m : history) {
             String role = (m.getRole() == ConversationMessageRole.USER) ? "Kullanıcı" : "Asistan";
             String content = (m.getContent() == null) ? "" : m.getContent().trim();
-
-            // ✅ Prompt şişmesini azaltmak için daha agresif kırpma
-            if (content.length() > 600) {
-                content = content.substring(0, 600) + " ...";
-            }
-
+            if (content.length() > 600) content = content.substring(0, 600) + " ...";
             sb.append(role).append(": ").append(content).append("\n");
         }
-
         return sb.toString().trim();
     }
 
     private boolean isConversationMemoryQuery(String q) {
         if (q == null) return false;
         String s = q.toLowerCase();
-
         return s.contains("az önce") ||
                 s.contains("daha önce") ||
                 s.contains("ne demiştim") ||
@@ -275,20 +316,17 @@ public class AiService {
         sb.append("- BAĞLAM ile çelişme; ancak BAĞLAM'ı aynen kopyalama, sadeleştirip yorumlayarak anlat.\n");
         sb.append("- Gereksiz tekrar yapma.\n");
 
-        // ✅ CHATGPT HİSSİ: hafıza kullanım kuralları
         sb.append("- Konuşma geçmişini diyaloğu sürdürmek için kullan: kullanıcının önceki niyetini, verdiği detayları hatırla.\n");
         sb.append("- Konuşma geçmişindeki bilgiler BAĞLAM ile çelişirse BAĞLAM'ı esas al ve bunu kibarca belirt.\n");
         sb.append("- Kullanıcı geçmişte bölüm/sınıf/tarih/ders adı gibi bilgi verdiyse cevapta dikkate al.\n");
         sb.append("- Gerekli bilgi yoksa 1 netleştirici soru sor.\n");
 
-        // Tone
         if (tone == Tone.TECHNICAL) {
             sb.append("- Ton: teknik ve net; doğru terimleri kullan.\n");
         } else {
             sb.append("- Ton: basit ve anlaşılır; jargon kullanma.\n");
         }
 
-        // Emotion
         String e = (emotion != null) ? emotion.name() : "UNKNOWN";
         switch (e) {
             case "ANXIOUS" -> sb.append("- Duygu: endişeli. En fazla 1 kısa, sakinleştirici cümle ekleyebilirsin; sonra bilgi ver.\n");
@@ -300,14 +338,12 @@ public class AiService {
         }
         sb.append("- Duygu cümlesi zorunlu değildir; gerekiyorsa sadece 1 cümle olsun.\n");
 
-        // Verbosity
         if (verbosity == Verbosity.CONCISE) {
             sb.append("- Uzunluk: kısa. 2–3 cümle hedefle.\n");
         } else {
             sb.append("- Uzunluk: normal. 3–6 cümle aralığında kal.\n");
         }
 
-        // Format
         if (format == AnswerFormat.STEP_BY_STEP) {
             sb.append("- Format: adım adım. Kısa numaralı adımlar kullan ('1)' formatında).\n");
             sb.append("- Adım numaraları yalnızca satır başında olmalı.\n");
@@ -315,7 +351,6 @@ public class AiService {
             sb.append("- Format: normal paragraf. Liste zorunlu değil.\n");
         }
 
-        // Citations: modelden istemiyoruz; sistem ekliyor
         if (citations) {
             sb.append("- Kaynaklar: Yanıt içinde kaynak yazma; sistem en sonda otomatik tek kaynak ekleyecek.\n");
         } else {
@@ -325,26 +360,16 @@ public class AiService {
         return sb.toString();
     }
 
-    private String stripSourcesSection(String answer) {
+    // ✅ Kullanıcıya gösterilmeyecek satırları temizler:
+    // - KULLANILAN_KAYNAK: ...
+    // - Kaynak: ... (model yazarsa)
+    private String stripInternalAndSources(String answer) {
         if (answer == null) return "";
-        String cleaned = answer.replaceAll("(?im)^\\s*Kaynaklar?\\s*:\\s*.*$", "");
+
+        String cleaned = answer.replaceAll("(?im)^\\s*KULLANILAN_KAYNAK\\s*:\\s*(S\\d+|YOK)\\s*$", "");
+        cleaned = cleaned.replaceAll("(?im)^\\s*Kaynaklar?\\s*:\\s*.*$", "");
+        cleaned = cleaned.replaceAll("(?im)^\\s*Kaynak\\s*:\\s*.*$", "");
         cleaned = cleaned.replaceAll("\\n{3,}", "\n\n");
         return cleaned.trim();
-    }
-
-    private String appendSingleSource(String answer, List<DocumentMatch> usedMatches) {
-        String url = null;
-        if (usedMatches != null && !usedMatches.isEmpty()) {
-            try {
-                Object u = usedMatches.get(0).metadata().get("url");
-                url = (u != null) ? u.toString() : null;
-            } catch (Exception ignored) {
-            }
-        }
-
-        if (url == null || url.isBlank()) {
-            return answer + "\n\nKaynak: Kaynak belirtilmemiş";
-        }
-        return answer + "\n\nKaynak: " + url.trim();
     }
 }

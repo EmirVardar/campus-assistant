@@ -5,11 +5,12 @@ import com.campus.backend.entity.EmbeddingsMap;
 import com.campus.backend.repository.EmbeddingsMapRepository;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.model.output.Response; // <-- YENİ IMPORT
+import dev.langchain4j.model.output.Response;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import jakarta.annotation.PostConstruct;
+
 import java.util.List;
 import java.util.Map;
 
@@ -33,73 +34,52 @@ public class EmbeddingService {
             return;
         }
 
-        // 1. Belgeyi (metni) oluştur
-        String doc = a.getTitle()+"\n\n"+a.getContent();
+        String doc = a.getTitle() + "\n\n" + a.getContent();
 
-        // ===== HATALI KISIM DÜZELTİLDİ =====
-
-        // 2. YENİ: Metni OpenAI kullanarak vektöre çevir
-        // Bu komut 'Response<Embedding>' döndürür
         Response<Embedding> response = embeddingModel.embed(doc);
-
-        // 3. 'Response' zarfının içinden '.content()' ile asıl embedding'i al
-        //    ve '.vectorAsList()' ile listeye çevir
         List<Float> vector = response.content().vectorAsList();
 
-        // ===== DÜZELTME BİTTİ =====
-
-        // 4. Metadata'yı hazırla
-// YENİ DÜZELTME: Chroma'nın sayısal değerlerde hata vermemesi için
-// 'id' de dahil olmak üzere her şeyi String'e çeviriyoruz.
+        // ✅ Metadata: title eklemek yararlı (zorunlu değil ama önerilir)
         Map<String, Object> metadata = Map.of(
                 "kind", "announcement",
-                "id", String.valueOf(a.getId()), // <-- HATA BURADAYDI, Long'u String'e çevirdik
+                "id", String.valueOf(a.getId()),
+                "title", a.getTitle() != null ? a.getTitle() : "",
                 "url", a.getUrl() != null ? a.getUrl() : "",
                 "category", a.getCategory() != null ? a.getCategory() : "",
-                "published_at", String.valueOf(a.getPublishedAt()) // Bu zaten String'di
+                "published_at", String.valueOf(a.getPublishedAt())
         );
 
-        // 5. Chroma'ya 'vector', 'metadata' VE 'doc' (metni) gönder
-        chroma.upsert("campus_kg", vid, vector, metadata, doc); // <-- 'doc' geri eklendi
+        chroma.upsert("campus_kg", vid, vector, metadata, doc);
 
-        // 6. Haritayı kaydet
         var map = new EmbeddingsMap();
         map.setKind("announcement");
         map.setRecordId(a.getId());
         map.setVectorId(vid);
         mapRepo.save(map);
-
     }
-    // Kopyalayıp EmbeddingService.java içine (indexAnnouncement metodunun altına) ekle
 
     @SuppressWarnings("unchecked")
     public List<DocumentMatch> findRelevantDocuments(String query, int topK) {
-        // 1. Kullanıcının sorusunu (query) vektöre çevir
+
         Response<Embedding> response = embeddingModel.embed(query);
         List<Float> vector = response.content().vectorAsList();
 
-        // 2. ChromaClient'taki yeni query metodunu kullanarak arama yap
         Map<?, ?> queryResult = chroma.query(vector, topK);
 
-        // 3. Chroma'dan gelen karmaşık Map yanıtını parse et
         List<DocumentMatch> matches = new java.util.ArrayList<>();
 
-        // Chroma her zaman [0] index'inde bir liste içinde liste döndürür
         List<List<String>> docLists = (List<List<String>>) queryResult.get("documents");
         List<List<Map<String, Object>>> metaLists = (List<List<Map<String, Object>>>) queryResult.get("metadatas");
         List<List<Double>> distLists = (List<List<Double>>) queryResult.get("distances");
 
-        // Sonuç yoksa boş liste dön
         if (docLists == null || docLists.isEmpty()) {
             return matches;
         }
 
-        // Biz tek sorgu attığımız için ilk ([0]) listedeki sonuçları al
         List<String> docs = docLists.get(0);
         List<Map<String, Object>> metas = metaLists.get(0);
         List<Double> dists = distLists.get(0);
 
-        // 4. Sonuçları temiz DocumentMatch listesine çevir
         for (int i = 0; i < docs.size(); i++) {
             matches.add(new DocumentMatch(
                     docs.get(i),
@@ -107,6 +87,9 @@ public class EmbeddingService {
                     dists.get(i)
             ));
         }
+
+        // ✅ ZORUNLU: Mesafeye göre sırala (küçük mesafe = daha iyi eşleşme)
+        matches.sort((a, b) -> Double.compare(a.distance(), b.distance()));
 
         return matches;
     }
