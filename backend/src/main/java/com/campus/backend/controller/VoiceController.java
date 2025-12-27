@@ -54,6 +54,6 @@ public class VoiceController {
         String base64Audio = Base64.getEncoder().encodeToString(audioBytes);
 
         // 6) Text + Ses + Emotion döndür (answer linkli olabilir, ses linksiz olacak)
-        return ResponseEntity.ok(new VoiceResponse(aiAnswer, base64Audio, emotion));
+        return ResponseEntity.ok(new VoiceResponse(aiAnswer, base64Audio, emotion,ttsText));
     }
 }

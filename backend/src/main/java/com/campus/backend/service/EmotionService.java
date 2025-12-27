@@ -1,48 +1,42 @@
 package com.campus.backend.service;
 
 import com.campus.backend.dto.Emotion;
-import dev.langchain4j.model.chat.ChatLanguageModel;
+import com.campus.backend.dto.EmotionPredictRequest;
+import com.campus.backend.dto.EmotionPredictResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-
-import java.util.Locale;
+import org.springframework.web.client.RestClient;
 
 @Service
 @RequiredArgsConstructor
 public class EmotionService {
 
-    private final ChatLanguageModel chatModel;
+    private final RestClient restClient;
 
-    /**
-     * Kullanıcının kısa cümle / sorusundan duygusal durumu tahmin eder.
-     * Çıktı: HAPPY, SAD, ANGRY, ANXIOUS, NEUTRAL
-     */
+    @Value("${app.emotion.url:http://127.0.0.1:8099/predict}")
+    private String emotionUrl;
+
     public Emotion detectEmotion(String userUtterance) {
         if (userUtterance == null || userUtterance.isBlank()) {
             return Emotion.UNKNOWN;
         }
 
-        String prompt = """
-                Aşağıdaki kullanıcı cümlesinin duygusal durumunu etiketle.
-                Kullanıcı Türkçe veya İngilizce konuşabilir.
-
-                Sadece şu etiketlerden BİRİNİ döndür:
-                HAPPY, SAD, ANGRY, ANXIOUS, NEUTRAL
-
-                Ekstra açıklama, cümle veya sembol yazma.
-                Sadece etiketi yaz.
-
-                Kullanıcı cümlesi:
-                "%s"
-                """.formatted(userUtterance);
-
-        String raw = chatModel.generate(prompt)//tahmin burada yapışıyor
-                .trim()
-                .toUpperCase(Locale.ROOT);
-
         try {
-            return Emotion.valueOf(raw);
-        } catch (IllegalArgumentException e) {
+            EmotionPredictResponse resp = restClient.post()
+                    .uri(emotionUrl)
+                    .body(new EmotionPredictRequest(userUtterance))
+                    .retrieve()
+                    .body(EmotionPredictResponse.class);
+
+            if (resp == null || resp.getEmotion() == null || resp.getEmotion().isBlank()) {
+                return Emotion.UNKNOWN;
+            }
+
+            String label = resp.getEmotion().trim().toUpperCase();
+            return Emotion.valueOf(label);
+
+        } catch (Exception e) {
             return Emotion.UNKNOWN;
         }
     }

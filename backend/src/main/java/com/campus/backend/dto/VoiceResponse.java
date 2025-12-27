@@ -10,7 +10,11 @@ import lombok.ToString;
 @AllArgsConstructor
 public class VoiceResponse {
     private String answer;
+
     @ToString.Exclude
     private String audioBase64;
+
     private Emotion emotion;
+
+    private String ttsText; // <-- YENİ
 }
