@@ -1,44 +1,41 @@
-// app/(tabs)/_layout.tsx
 import React from 'react';
 import { Tabs, Redirect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 
-const DarkThemeColors = {
-  background: '#0b1220',
-  active: '#10b981',
-  inactive: '#9CA3AF',
+const LightTheme = {
+  bg: '#F8FAFC',
+  card: '#FFFFFF',
+  border: 'rgba(15, 23, 42, 0.10)',
+  text: '#0F172A',
+  active: '#111827', // siyah premium
+  inactive: 'rgba(15, 23, 42, 0.45)',
 };
 
 export default function TabsLayout() {
   const { token, isLoading } = useAuth();
 
-  // Token restore ediliyorsa bekle (UI istersen loader koy)
   if (isLoading) return null;
-
-  // ✅ Token yoksa tabs'a izin verme
-  if (!token) {
-    return <Redirect href="/login" />;
-  }
+  if (!token) return <Redirect href="/login" />;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
         tabBarHideOnKeyboard: true,
-        tabBarActiveTintColor: DarkThemeColors.active,
-        tabBarInactiveTintColor: DarkThemeColors.inactive,
+        tabBarActiveTintColor: LightTheme.active,
+        tabBarInactiveTintColor: LightTheme.inactive,
         tabBarLabelStyle: { fontSize: 12, fontWeight: '700' },
         tabBarItemStyle: { paddingVertical: 6 },
         tabBarStyle: {
-          backgroundColor: DarkThemeColors.background,
-          borderTopColor: '#1f2937',
+          backgroundColor: LightTheme.card,
+          borderTopColor: LightTheme.border,
+          borderTopWidth: 1,
           height: 62,
           paddingBottom: 8,
         },
       }}
     >
-
       <Tabs.Screen
         name="index"
         options={{
@@ -55,6 +52,16 @@ export default function TabsLayout() {
           title: 'Chat',
           tabBarIcon: ({ size, color }) => (
             <Ionicons name="chatbubble-ellipses-outline" size={size} color={color} />
+          ),
+        }}
+      />
+
+      <Tabs.Screen
+        name="voice"
+        options={{
+          title: 'Voice',
+          tabBarIcon: ({ size, color }) => (
+            <Ionicons name="mic-outline" size={size} color={color} />
           ),
         }}
       />
