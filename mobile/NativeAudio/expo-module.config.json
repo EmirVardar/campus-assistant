@@ -1,0 +1,10 @@
+{
+  "name": "NativeAudio",
+  "platforms": ["ios", "android"],
+  "ios": {
+    "modules": ["NativeAudioModule"]
+  },
+  "android": {
+    "modules": ["com.anonymous.mobile.NativeAudioModule"]
+  }
+}

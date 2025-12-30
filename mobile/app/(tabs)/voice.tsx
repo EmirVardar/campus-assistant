@@ -1,3 +1,4 @@
+// mobile/app/(tabs)/voice.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
@@ -20,84 +21,126 @@ import NativeAudio, { NativeAudioEmitter } from '../../lib/NativeAudio';
 const API_BASE = process.env.EXPO_PUBLIC_API_URL;
 
 type Phase = 'idle' | 'listening' | 'thinking' | 'speaking';
+type Emotion = 'HAPPY' | 'SAD' | 'ANGRY' | 'ANXIOUS' | 'NEUTRAL' | 'UNKNOWN';
 
-/**
- * ✅ Performans:
- * - 34 bar, tek Animated.Value (levelAnim) -> kasma azalır
- * - FRAME_MS 70ms -> daha stabil
- *
- * ✅ Görsel:
- * - Genlik yüksek (MAX_GAIN)
- * - Kapsül bar (borderRadius 999)
- * - Merkez barlar biraz daha parlak + güçlü barlar 1px daha kalın
- *
- * ✅ Fix (A):
- * - "Ortadan açılıyor" hissini azaltmak için center ağırlığı kırıldı (daha homojen)
- */
 const BARS = 34;
 const FRAME_MS = 70;
 
-const MIN_SCALE = 0.12; // taban ince
-const MAX_GAIN = 1.85;  // genlik yüksek
+const MIN_SCALE = 0.12;
+const MAX_GAIN = 2.05;
 
-/* ================= HELPERS ================= */
+const T = {
+  bg: '#F8FAFC',
+  text: '#0F172A',
+  text2: 'rgba(15,23,42,0.70)',
+  muted: 'rgba(15,23,42,0.55)',
+  border: 'rgba(15,23,42,0.10)',
+  borderSoft: 'rgba(15,23,42,0.08)',
+  card: '#FFFFFF',
+  cardSubtle: 'rgba(248,250,252,0.90)',
+
+  wave: 'rgba(2,132,199,0.92)',
+  glow: 'rgba(2,132,199,0.14)',
+
+  ok: 'rgba(22,163,74,0.90)',
+  warn: 'rgba(245,158,11,0.92)',
+  idle: 'rgba(15,23,42,0.25)',
+};
 
 function clamp01(v: number) {
   return Math.max(0, Math.min(1, v));
 }
-
-// Daha “punchy” algı
 function easeLevel(x: number) {
   const y = clamp01(x);
   return Math.pow(y, 0.52);
 }
 
-/**
- * ✅ FIX (A) — Homojenlik:
- * Eski center: cos^1.55  -> kenarları çok öldürüyordu.
- * Yeni center: taban + cos^0.9 -> kenarlar da canlı kalır.
- */
 function makeGains(n: number) {
   const mid = (n - 1) / 2;
+  const centerBias = 0.80;
+  const edgeFloor = 0.18;
+
   return Array.from({ length: n }, (_, i) => {
     const dist = Math.abs(i - mid) / mid;
-
-    // ✅ daha homojen dağılım: merkez yine güçlü ama kenarlar “ölmüyor”
-    const center = 0.58 + 0.42 * Math.pow(Math.cos(dist * Math.PI * 0.5), 0.9);
-
-    // sabit küçük rastgelelik: bağımsız hissi (biraz daha kontrollü)
-    const rand = 0.90 + Math.random() * 0.28; // 0.90..1.18
-
-    // kenara doğru çok az karakter (daha hafif)
-    const edge = 0.96 + dist * 0.06;
-
-    return clamp01(center * rand * edge);
+    const gaussian = Math.exp(-Math.pow(dist / 0.52, 2));
+    const shaped = edgeFloor + (1 - edgeFloor) * gaussian;
+    const rand = 0.96 + Math.random() * 0.08;
+    const g = (1 - centerBias) * 1.0 + centerBias * shaped;
+    return clamp01(g * rand);
   });
 }
 
-function makePhases(n: number) {
-  return Array.from({ length: n }, () => Math.random() * Math.PI * 2);
+function colorsForEmotion(e: Emotion) {
+  switch (e) {
+    case 'HAPPY':
+      return { wave: 'rgba(22,163,74,0.92)', glow: 'rgba(22,163,74,0.14)' };
+    case 'SAD':
+      return { wave: 'rgba(37,99,235,0.92)', glow: 'rgba(37,99,235,0.14)' };
+    case 'ANGRY':
+      return { wave: 'rgba(220,38,38,0.92)', glow: 'rgba(220,38,38,0.14)' };
+    case 'ANXIOUS':
+      return { wave: 'rgba(245,158,11,0.92)', glow: 'rgba(245,158,11,0.14)' };
+    case 'UNKNOWN':
+      return { wave: 'rgba(15,23,42,0.30)', glow: 'rgba(15,23,42,0.08)' };
+    case 'NEUTRAL':
+    default:
+      return { wave: T.wave, glow: T.glow };
+  }
 }
 
-/* ================= COMPONENT ================= */
+// “Yavaş & ince” travelling-wave için daha yumuşak keyframe üretimi
+function buildTravelKeyframes(
+  bars: number,
+  samples: number,
+  opts: { sigma?: number; freq?: number; floor?: number }
+) {
+  const sigma = opts.sigma ?? 0.28;  // ↑ daha geniş tepe (atım hissi azalır)
+  const freq = opts.freq ?? 0.85;    // ↓ daha yumuşak dalga
+  const floor = opts.floor ?? 0.04;  // ↓ taban
+
+  const inputRange = Array.from({ length: samples }, (_, k) => k / (samples - 1));
+  const perBarOutputs: number[][] = Array.from({ length: bars }, () => []);
+
+  for (let i = 0; i < bars; i++) {
+    const pos = bars === 1 ? 0 : i / (bars - 1);
+    for (let k = 0; k < samples; k++) {
+      const t = inputRange[k];
+
+      let d = pos - t;
+      d = ((d + 1.5) % 1) - 0.5;
+
+      const env = Math.exp(-Math.pow(d / sigma, 2)); // geniş env
+      const phase = 2 * Math.PI * (freq * (pos - t));
+      const carrier = 0.5 + 0.5 * Math.sin(phase);
+
+      // env baskın, carrier hafif (atım değil akış)
+      const shape = clamp01(floor + 0.75 * env * (0.55 + 0.45 * carrier));
+      perBarOutputs[i].push(shape);
+    }
+  }
+
+  return { inputRange, perBarOutputs };
+}
 
 export default function VoiceTab() {
   const { token } = useAuth();
 
   const [phase, setPhase] = useState<Phase>('idle');
+  const [emotion, setEmotion] = useState<Emotion>('NEUTRAL');
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
 
   const soundRef = useRef<Audio.Sound | null>(null);
 
-  // ✅ Tek animasyon değeri
   const levelAnim = useRef(new Animated.Value(0)).current;
   const glowAnim = useRef(new Animated.Value(0)).current;
 
-  // ✅ bar karakterleri (sabit)
-  const gains = useRef(makeGains(BARS)).current;
-  const phases = useRef(makePhases(BARS)).current;
+  const travelT = useRef(new Animated.Value(0)).current;
+  const travelLoopRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  // ✅ press-to-talk stability refs
+  // 0 => travel, 1 => mouth
+  const mouthAmount = useRef(new Animated.Value(0)).current;
+
+  const gains = useRef(makeGains(BARS)).current;
   const isPressedRef = useRef(false);
   const startInFlightRef = useRef(false);
   const stopQueuedRef = useRef(false);
@@ -120,6 +163,26 @@ export default function VoiceTab() {
     }
   }, [phase]);
 
+  const emotionLabel = useMemo(() => {
+    switch (emotion) {
+      case 'HAPPY':
+        return 'Mutlu';
+      case 'SAD':
+        return 'Üzgün';
+      case 'ANGRY':
+        return 'Kızgın';
+      case 'ANXIOUS':
+        return 'Kaygılı';
+      case 'NEUTRAL':
+        return 'Nötr';
+      case 'UNKNOWN':
+      default:
+        return 'Bilinmiyor';
+    }
+  }, [emotion]);
+
+  const emo = useMemo(() => colorsForEmotion(emotion), [emotion]);
+
   const animateLevel = (lvl: number) => {
     const target = easeLevel(lvl);
 
@@ -131,7 +194,7 @@ export default function VoiceTab() {
     }).start();
 
     Animated.timing(glowAnim, {
-      toValue: Math.min(1, target * 1.1),
+      toValue: Math.min(1, target * 1.05),
       duration: FRAME_MS,
       easing: Easing.out(Easing.quad),
       useNativeDriver: true,
@@ -143,15 +206,53 @@ export default function VoiceTab() {
     glowAnim.setValue(0);
   };
 
-  /* ---------- NativeAudio: listen for mic level ---------- */
+  const startTravelLoop = () => {
+    if (travelLoopRef.current) return;
+    travelLoopRef.current = Animated.loop(
+      Animated.timing(travelT, {
+        toValue: 1,
+        duration: 3400, // ✅ daha yavaş
+        easing: Easing.linear,
+        useNativeDriver: true,
+      })
+    );
+    travelLoopRef.current.start();
+  };
+
+  const stopTravelLoop = () => {
+    try {
+      travelLoopRef.current?.stop();
+    } catch {}
+    travelLoopRef.current = null;
+    try {
+      travelT.stopAnimation();
+    } catch {}
+    travelT.setValue(0);
+  };
+
+  const travelEnabled = phase === 'idle' || phase === 'thinking';
+  useEffect(() => {
+    if (travelEnabled) startTravelLoop();
+    else stopTravelLoop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [travelEnabled]);
+
+  useEffect(() => {
+    const target = phase === 'listening' || phase === 'speaking' ? 1 : 0;
+    Animated.timing(mouthAmount, {
+      toValue: target,
+      duration: 220,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [phase, mouthAmount]);
+
   useEffect(() => {
     isMountedRef.current = true;
 
     const subLevel = NativeAudioEmitter.addListener('onLevel', (p: any) => {
       if (!isPressedRef.current) return;
-      if (p && typeof p.level === 'number') {
-        animateLevel(clamp01(p.level));
-      }
+      if (p && typeof p.level === 'number') animateLevel(clamp01(p.level));
     });
 
     const subErr = NativeAudioEmitter.addListener('onError', (p: any) => {
@@ -163,10 +264,8 @@ export default function VoiceTab() {
       subLevel.remove();
       subErr.remove();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------- Cleanup on unmount ---------- */
   useEffect(() => {
     return () => {
       try {
@@ -177,20 +276,17 @@ export default function VoiceTab() {
   }, []);
 
   const stopAllNow = async () => {
-    // stop audio playback
     try {
       await soundRef.current?.stopAsync();
       await soundRef.current?.unloadAsync();
     } catch {}
     soundRef.current = null;
 
-    // stop recording
     try {
       await recording?.stopAndUnloadAsync();
     } catch {}
     setRecording(null);
 
-    // stop native meter
     try {
       NativeAudio.stop?.();
     } catch {}
@@ -198,8 +294,6 @@ export default function VoiceTab() {
     resetWave();
     setPhase('idle');
   };
-
-  /* ================= PRESS-TO-TALK FLOW ================= */
 
   const ensureMicPermissionAndStartMeters = async () => {
     const granted = await NativeAudio.requestPermission();
@@ -215,7 +309,7 @@ export default function VoiceTab() {
 
   const startRecording = async () => {
     if (!token) return;
-    if (phase === 'thinking' || phase === 'speaking') return;
+    if (disabled) return;
     if (startInFlightRef.current) return;
     if (recording) return;
 
@@ -240,9 +334,7 @@ export default function VoiceTab() {
       });
 
       const rec = new Audio.Recording();
-      await rec.prepareToRecordAsync({
-        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      });
+      await rec.prepareToRecordAsync({ ...Audio.RecordingOptionsPresets.HIGH_QUALITY });
       await rec.startAsync();
 
       if (!isMountedRef.current) return;
@@ -266,6 +358,7 @@ export default function VoiceTab() {
       stopQueuedRef.current = true;
       return;
     }
+
     if (!recording) {
       try {
         NativeAudio.stop?.();
@@ -293,18 +386,14 @@ export default function VoiceTab() {
 
       resetWave();
 
-      if (uri) {
-        await sendVoice(uri);
-      } else {
-        setPhase('idle');
-      }
+      if (uri) await sendVoice(uri);
+      else setPhase('idle');
     } catch (e: any) {
       console.log('[voice] stopRecording error', e);
       await stopAllNow();
     }
   };
 
-  /* ---------- BACKEND ---------- */
   const sendVoice = async (uri: string) => {
     try {
       const form = new FormData();
@@ -317,20 +406,23 @@ export default function VoiceTab() {
         body: form,
       });
 
-      const data: { audioBase64?: string; ttsText?: string } = await res.json();
+      const data: {
+        audioBase64?: string;
+        ttsText?: string;
+        emotion?: Emotion;
+        answer?: string;
+      } = await res.json();
 
-      if (data.audioBase64) {
-        await playAudio(data.audioBase64);
-      } else {
-        setPhase('idle');
-      }
+      setEmotion(data.emotion ?? 'NEUTRAL');
+
+      if (data.audioBase64) await playAudio(data.audioBase64);
+      else setPhase('idle');
     } catch (e: any) {
       console.log('[voice] sendVoice error', e);
       setPhase('idle');
     }
   };
 
-  /* ---------- PLAYBACK (REAL SYNC) ---------- */
   const playAudio = async (base64: string) => {
     try {
       setPhase('speaking');
@@ -343,9 +435,9 @@ export default function VoiceTab() {
       });
 
       const uri = FileSystem.documentDirectory + 'answer.mp3';
-      await FileSystem.writeAsStringAsync(uri, base64, { encoding: 'base64' });
+      const clean = base64.replace(/\s/g, '');
+      await FileSystem.writeAsStringAsync(uri, clean, { encoding: 'base64' });
 
-      // Native tarafta MP3 analizi (FRAME_MS)
       const levels = await NativeAudio.analyzeFile(uri, FRAME_MS);
 
       const { sound } = await Audio.Sound.createAsync({ uri });
@@ -380,24 +472,79 @@ export default function VoiceTab() {
     soundRef.current = null;
   };
 
-  /* ================= UI ================= */
+  // ---- shapes ----
+  const { inputRange, perBarOutputs } = useMemo(() => {
+    return buildTravelKeyframes(BARS, 25, { sigma: 0.28, freq: 0.85, floor: 0.04 });
+  }, []);
+
+  // Konuşma enerjisi: daha yumuşak + tavan
+  const energyRaw = useMemo(() => {
+    return levelAnim.interpolate({
+      inputRange: [0, 0.20, 0.45, 0.75, 1],
+      outputRange: [0, 0.08, 0.42, 0.78, 1],
+      extrapolate: 'clamp',
+    });
+  }, [levelAnim]);
+
+  // ✅ taşmayı engelle: max 0.78
+  const energyClamped = useMemo(() => {
+    return Animated.diffClamp(energyRaw as any, 0, 0.78) as any;
+  }, [energyRaw]);
+
+  const mouthWeightForIndex = useMemo(() => {
+    const mid = (BARS - 1) / 2;
+    return Array.from({ length: BARS }, (_, i) => {
+      const dist = Math.abs(i - mid) / mid;
+      const w = Math.exp(-Math.pow(dist / 0.42, 2));
+      return clamp01(0.20 + 0.80 * w);
+    });
+  }, []);
 
   const barViews = useMemo(() => {
+    const idleAmp = 0.04;      // ✅ daha ince
+    const travelBoost = 0.20;  // ✅ daha sakin (atım değil)
+    const mouthBase = 0.10;
+    const mouthBoost = 1.50;   // ✅ konuşma genliği düşürüldü
+
+    const oneMinusMouth = Animated.subtract(1, mouthAmount);
+
     return gains.map((g, i) => {
-      const scaleY = levelAnim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [MIN_SCALE, MIN_SCALE + MAX_GAIN * g],
+      const travelShape = travelT.interpolate({
+        inputRange,
+        outputRange: perBarOutputs[i],
         extrapolate: 'clamp',
       });
 
-      const wobbleX = levelAnim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [1, 1 + 0.035 * Math.sin(phases[i])],
+      const travelCombined = Animated.multiply(
+        travelShape,
+        Animated.add(idleAmp, Animated.multiply(travelBoost, travelShape))
+      );
+
+      const mouthCombined = Animated.multiply(
+        Animated.add(mouthBase, Animated.multiply(mouthBoost, energyClamped)),
+        mouthWeightForIndex[i]
+      );
+
+      const blended = Animated.add(
+        Animated.multiply(travelCombined, oneMinusMouth),
+        Animated.multiply(mouthCombined, mouthAmount)
+      );
+
+      // ✅ scaleY üst tavan: inputRange’ı daraltıp taşmayı azaltıyoruz
+      const scaleY = blended.interpolate({
+        inputRange: [0, 1.15],
+        outputRange: [MIN_SCALE + 0.01, MIN_SCALE + 0.01 + (MAX_GAIN * 1.10) * g],
         extrapolate: 'clamp',
       });
 
-      const baseOpacity = 0.78 + 0.22 * g;
-      const width = 3 + (g > 0.55 ? 1 : 0);
+      const wobbleX = blended.interpolate({
+        inputRange: [0, 1],
+        outputRange: [1, 1.015],
+        extrapolate: 'clamp',
+      });
+
+      const baseOpacity = 0.66 + 0.34 * g;
+      const width = 3 + (g > 0.88 ? 1 : 0);
 
       return (
         <Animated.View
@@ -407,45 +554,71 @@ export default function VoiceTab() {
             {
               width,
               opacity: baseOpacity,
+              backgroundColor: emo.wave,
               transform: [{ scaleY }, { scaleX: wobbleX }],
             },
           ]}
         />
       );
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gains, phases]);
+  }, [
+    gains,
+    travelT,
+    inputRange,
+    perBarOutputs,
+    mouthAmount,
+    energyClamped,
+    mouthWeightForIndex,
+    emo.wave,
+  ]);
 
   const glowOpacity = glowAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [0.10, 0.48],
+    outputRange: [0.05, 0.16],
     extrapolate: 'clamp',
   });
 
   const glowScale = glowAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [1, 1.10],
+    outputRange: [1, 1.06],
     extrapolate: 'clamp',
   });
 
+  const dotStyle =
+    phase === 'speaking'
+      ? { backgroundColor: emo.wave }
+      : phase === 'listening'
+      ? styles.dotOn
+      : phase === 'thinking'
+      ? styles.dotThink
+      : styles.dotIdle;
+
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe} edges={['top']}>
+      <View pointerEvents="none" style={styles.bg}>
+        <View style={styles.glowTop} />
+        <View style={styles.glowBottom} />
+      </View>
+
       <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>Sesli Asistan</Text>
+        <View style={styles.headerCard}>
+          <View style={styles.headerLeft}>
+            <View style={styles.iconChip}>
+              <Ionicons name="mic-outline" size={16} color={T.text2} />
+            </View>
+
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.title} numberOfLines={1}>
+                Sesli Asistan
+              </Text>
+              <Text style={styles.subtitle} numberOfLines={2}>
+                Basılı tutarak konuş, bırakınca gönderilir.
+              </Text>
+            </View>
+          </View>
+
           <View style={styles.badge}>
-            <View
-              style={[
-                styles.dot,
-                phase === 'listening'
-                  ? styles.dotOn
-                  : phase === 'speaking'
-                  ? styles.dotSpeak
-                  : phase === 'thinking'
-                  ? styles.dotThink
-                  : styles.dotIdle,
-              ]}
-            />
+            <View style={[styles.dot, dotStyle]} />
             <Text style={styles.badgeText}>{phaseLabel}</Text>
           </View>
         </View>
@@ -454,16 +627,35 @@ export default function VoiceTab() {
           <Animated.View
             pointerEvents="none"
             style={[
-              styles.glow,
-              { opacity: glowOpacity, transform: [{ scale: glowScale }] },
+              styles.waveGlow,
+              {
+                opacity: glowOpacity,
+                transform: [{ scale: glowScale }],
+                backgroundColor: emo.glow,
+              },
             ]}
           />
-
           <View style={styles.waveRow}>{barViews}</View>
 
-          <Text style={styles.subHint}>
-            Basılı tutarak konuş, bırakınca gönderilir.
-          </Text>
+          <View style={styles.metaRow}>
+            <View style={styles.metaChip}>
+              <Ionicons name="sparkles-outline" size={14} color={T.text2} />
+              <Text style={styles.metaText}>
+                {phase === 'thinking'
+                  ? 'Yanıt hazırlanıyor'
+                  : phase === 'speaking'
+                  ? 'Ses oynatılıyor'
+                  : phase === 'listening'
+                  ? 'Dinleniyor'
+                  : 'Bekliyor'}
+              </Text>
+            </View>
+
+            <View style={styles.metaChip}>
+              <View style={[styles.emotionDot, { backgroundColor: emo.wave }]} />
+              <Text style={styles.metaText}>{emotionLabel}</Text>
+            </View>
+          </View>
         </View>
 
         <Pressable
@@ -481,51 +673,114 @@ export default function VoiceTab() {
             stopRecording();
           }}
           style={({ pressed }) => [
-            styles.micWrap,
-            disabled && styles.micDisabled,
-            pressed && !disabled && styles.micPressed,
+            styles.ptt,
+            disabled && styles.pttDisabled,
+            pressed && !disabled && styles.pttPressed,
           ]}
         >
-          <View style={styles.micInner}>
-            <Ionicons name="mic" size={28} color="#081018" />
+          <View style={styles.pttInner}>
+            <Ionicons name="mic" size={22} color="#FFFFFF" />
           </View>
-          <Text style={styles.micText}>{disabled ? 'Bekle' : 'Konuş'}</Text>
+          <Text style={styles.pttText}>{disabled ? 'Bekle' : 'Konuş'}</Text>
         </Pressable>
 
         <Text style={styles.footerNote}>
           {Platform.OS === 'ios'
-            ? 'iOS: daha akıcı için Release build test et.'
-            : 'Android: dalga performansı cihazda daha iyi olur.'}
+            ? 'En akıcı sonuç için Release build üzerinde test et.'
+            : 'Cihazda performans genelde daha iyi olur.'}
         </Text>
       </View>
     </SafeAreaView>
   );
 }
 
-/* ================= STYLES ================= */
-
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#070A12' },
+  safe: { flex: 1, backgroundColor: T.bg },
+
+  bg: { ...StyleSheet.absoluteFillObject, backgroundColor: T.bg },
+  glowTop: {
+    position: 'absolute',
+    top: -160,
+    left: -140,
+    width: 360,
+    height: 360,
+    borderRadius: 999,
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+  },
+  glowBottom: {
+    position: 'absolute',
+    bottom: -180,
+    right: -150,
+    width: 380,
+    height: 380,
+    borderRadius: 999,
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
+  },
+
   container: {
     flex: 1,
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     justifyContent: 'center',
-    alignItems: 'center',
   },
 
-  header: {
-    width: '100%',
-    marginBottom: 14,
+  headerCard: {
+    backgroundColor: T.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: T.border,
+    padding: 14,
+    marginBottom: 12,
+
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 3,
+
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
   },
-  title: {
-    color: '#E5E7EB',
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: 0.2,
+
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 10,
   },
+
+  headerTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  iconChip: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    backgroundColor: 'rgba(15,23,42,0.04)',
+    borderWidth: 1,
+    borderColor: T.borderSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  title: {
+    color: T.text,
+    fontSize: 16.5,
+    fontWeight: '700',
+    letterSpacing: 0.1,
+  },
+  subtitle: {
+    marginTop: 3,
+    color: T.muted,
+    fontSize: 12.5,
+    fontWeight: '500',
+    lineHeight: 16,
+  },
+
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -533,108 +788,134 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: 'rgba(148,163,184,0.10)',
+    backgroundColor: T.cardSubtle,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: T.borderSoft,
+    marginLeft: 10,
+    marginTop: 2,
+    flexShrink: 0,
   },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#475569',
-  },
-  dotIdle: { backgroundColor: '#64748B' },
-  dotOn: { backgroundColor: '#38BDF8' },
-  dotSpeak: { backgroundColor: '#22C55E' },
-  dotThink: { backgroundColor: '#FBBF24' },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: T.idle },
+  dotIdle: { backgroundColor: T.idle },
+  dotOn: { backgroundColor: T.wave },
+  dotThink: { backgroundColor: T.warn },
   badgeText: {
-    color: '#CBD5E1',
+    color: T.text2,
     fontSize: 12,
     fontWeight: '600',
   },
 
   waveCard: {
-    width: '100%',
+    backgroundColor: T.card,
     borderRadius: 18,
-    paddingVertical: 18,
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(15,23,42,0.62)',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.14)',
-    overflow: 'hidden',
-    marginBottom: 18,
+    borderColor: T.border,
+    paddingVertical: 16,
+    paddingHorizontal: 14,
 
     shadowColor: '#000',
-    shadowOpacity: 0.35,
+    shadowOpacity: 0.06,
     shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 8,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 3,
+
+    overflow: 'hidden',
+    marginBottom: 14,
   },
-  glow: {
+
+  waveGlow: {
     position: 'absolute',
-    left: -40,
-    right: -40,
-    top: -30,
-    bottom: -30,
+    left: -44,
+    right: -44,
+    top: -34,
+    bottom: -34,
     borderRadius: 999,
-    backgroundColor: 'rgba(125, 211, 252, 0.26)',
+    backgroundColor: T.glow,
   },
 
   waveRow: {
-    height: 78,
+    height: 86,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
-    marginBottom: 10,
+    marginBottom: 12,
   },
+
   bar: {
-    height: 44,
+    height: 48,
     borderRadius: 999,
-    backgroundColor: '#7DD3FC',
+    backgroundColor: T.wave,
   },
 
-  subHint: {
-    color: '#94A3B8',
-    fontSize: 12,
-    textAlign: 'center',
-  },
-
-  micWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     gap: 10,
   },
-  micInner: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    backgroundColor: '#7DD3FC',
+
+  metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: T.cardSubtle,
+    borderWidth: 1,
+    borderColor: T.borderSoft,
+  },
+  metaText: {
+    color: T.text2,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
+  emotionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+
+  ptt: {
+    alignSelf: 'center',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 2,
+  },
+
+  pttInner: {
+    width: 64,
+    height: 64,
+    borderRadius: 18,
+    backgroundColor: T.text,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#7DD3FC',
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 10,
-  },
-  micPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.98,
-  },
-  micDisabled: { opacity: 0.35 },
+    borderWidth: 1,
+    borderColor: T.borderSoft,
 
-  micText: {
-    color: '#CBD5E1',
-    fontSize: 13,
-    fontWeight: '600',
-    letterSpacing: 0.2,
+    shadowColor: '#000',
+    shadowOpacity: 0.10,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 6,
+  },
+
+  pttPressed: { transform: [{ scale: 0.985 }], opacity: 0.98 },
+  pttDisabled: { opacity: 0.45 },
+
+  pttText: {
+    color: T.text2,
+    fontSize: 12.8,
+    fontWeight: '700',
+    letterSpacing: 0.1,
   },
 
   footerNote: {
-    marginTop: 18,
-    color: 'rgba(148,163,184,0.65)',
-    fontSize: 11,
+    marginTop: 14,
     textAlign: 'center',
+    color: 'rgba(15,23,42,0.45)',
+    fontSize: 11.5,
+    fontWeight: '600',
   },
 });

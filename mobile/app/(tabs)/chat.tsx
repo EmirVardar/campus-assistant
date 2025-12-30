@@ -19,7 +19,7 @@ import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Clipboard from 'expo-clipboard';
 
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -43,14 +43,11 @@ const dbg = (...args: any[]) => {
 const extractUrls = (text: string): string[] => {
   const matches = text.match(/https?:\/\/\S+/g);
   if (!matches) return [];
-  return Array.from(new Set(matches.map(u => u.replace(/[),.]+$/g, ''))));
+  return Array.from(new Set(matches.map((u) => u.replace(/[),.]+$/g, ''))));
 };
 
 const stripSourcesAndUrls = (text: string): string => {
-  return text
-    .replace(/\s*Kaynaklar?:.*$/i, '')
-    .replace(/https?:\/\/\S+/g, '')
-    .trim();
+  return text.replace(/\s*Kaynaklar?:.*$/i, '').replace(/https?:\/\/\S+/g, '').trim();
 };
 
 const formatEmotion = (e?: string) => {
@@ -68,14 +65,13 @@ const timeLabel = () => {
 };
 
 export default function ChatTab() {
-  const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
 
   // ✅ Composer yüksekliği (FlatList paddingBottom için)
   const [composerHeight, setComposerHeight] = useState(0);
 
   const [messages, setMessages] = useState<Msg>([
-    { id: 'sys', role: 'assistant', text: 'Merhaba! Yazabilir veya konuşabilirsin 🎙️' },
+    { id: 'sys', role: 'assistant', text: 'Merhaba! Yazabilir veya konuşabilirsin.' },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -96,18 +92,13 @@ export default function ChatTab() {
     flatListRef.current?.scrollToEnd({ animated: true });
   };
 
-  const addMessage = (
-    role: 'user' | 'assistant',
-    text: string,
-    urls?: string[],
-    emotion?: string
-  ) => {
-    setMessages(m => [...m, { id: Date.now() + '-' + role[0], role, text, urls, emotion }]);
+  const addMessage = (role: 'user' | 'assistant', text: string, urls?: string[], emotion?: string) => {
+    setMessages((m) => [...m, { id: Date.now() + '-' + role[0], role, text, urls, emotion }]);
     setTimeout(scrollToBottom, 120);
   };
 
   const markMessageFeedback = (msgId: string, feedback: 'like' | 'dislike') => {
-    setMessages(prev => prev.map(m => (m.id === msgId ? { ...m, feedback } : m)));
+    setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, feedback } : m)));
   };
 
   const sendPreferenceFeedback = async (tags: string[]) => {
@@ -134,7 +125,6 @@ export default function ChatTab() {
 
   const reasonToTags = (reasons: Record<string, boolean>): string[] => {
     const tags: string[] = [];
-
     if (reasons.tooLong) tags.push('KISA_ISTIYORUM');
     if (reasons.tooShort) tags.push('NORMAL_ISTIYORUM');
 
@@ -146,7 +136,6 @@ export default function ChatTab() {
 
     if (reasons.wantTechnical) tags.push('TEKNIK_ANLAT');
     if (reasons.wantSimple) tags.push('BASIT_ANLAT');
-
     return tags;
   };
 
@@ -216,9 +205,7 @@ export default function ChatTab() {
         playsInSilentModeIOS: true,
       });
 
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       setRecording(recording);
       dbg('Kayıt başladı');
     } catch {
@@ -312,7 +299,9 @@ export default function ChatTab() {
       console.error('SES ÇALMA HATASI:', error);
       Alert.alert('Ses Hatası', 'Ses oynatılamadı.');
       if (sound) {
-        try { await sound.unloadAsync(); } catch {}
+        try {
+          await sound.unloadAsync();
+        } catch {}
       }
     }
   };
@@ -348,27 +337,26 @@ export default function ChatTab() {
         <View style={[styles.bubble, styles.assistantBubble]}>
           <View style={styles.msgMetaRow}>
             <View style={[styles.metaChip, styles.metaChipAssistant]}>
-              <Ionicons name="sparkles-outline" size={12} color="#D1FAE5" />
-              <Text style={styles.metaChipText}>Asistan</Text>
+              <Ionicons name="sparkles-outline" size={12} color="rgba(15,23,42,0.70)" />
+              <Text style={styles.metaChipTextAssistant}>Asistan</Text>
             </View>
             <Text style={styles.metaTimeText}>{timeLabel()}</Text>
           </View>
 
-          <View style={{ marginTop: 8 }}>
-            <ActivityIndicator size="small" color="#E5E7EB" />
+          <View style={{ marginTop: 10 }}>
+            <ActivityIndicator size="small" color="rgba(15,23,42,0.60)" />
           </View>
         </View>
       );
     }
 
     const isUser = item.role === 'user';
-    const urls = !isUser ? (item.urls ?? []) : [];
+    const urls = !isUser ? item.urls ?? [] : [];
 
     const canFeedback = !isUser && item.role === 'assistant' && item.id !== 'sys';
     const feedbackDisabled = Boolean(item.feedback);
 
-    const showEmotion =
-      !isUser && item.role === 'assistant' && item.id !== 'sys' && Boolean(item.emotion);
+    const showEmotion = !isUser && item.role === 'assistant' && item.id !== 'sys' && Boolean(item.emotion);
 
     return (
       <View style={[styles.bubble, isUser ? styles.userBubble : styles.assistantBubble]}>
@@ -377,21 +365,23 @@ export default function ChatTab() {
             <Ionicons
               name={isUser ? 'person-outline' : 'sparkles-outline'}
               size={12}
-              color={isUser ? '#DBEAFE' : '#D1FAE5'}
+              color="rgba(15,23,42,0.70)"
             />
-            <Text style={styles.metaChipText}>{isUser ? 'Sen' : 'Asistan'}</Text>
+            <Text style={isUser ? styles.metaChipTextUser : styles.metaChipTextAssistant}>
+              {isUser ? 'Sen' : 'Asistan'}
+            </Text>
           </View>
           <Text style={styles.metaTimeText}>{timeLabel()}</Text>
         </View>
 
-        <Text style={styles.bubbleText} selectable>
+        <Text style={[styles.bubbleText, isUser ? styles.userText : styles.assistantText]} selectable>
           {item.text}
         </Text>
 
         {showEmotion && (
           <View style={styles.badgeRow}>
             <View style={styles.emotionBadge}>
-              <Ionicons name="pulse-outline" size={12} color="#E5E7EB" />
+              <Ionicons name="pulse-outline" size={12} color="rgba(15,23,42,0.65)" />
               <Text style={styles.emotionBadgeText}>{formatEmotion(item.emotion)}</Text>
             </View>
           </View>
@@ -400,7 +390,7 @@ export default function ChatTab() {
         {!isUser && urls.length > 0 && (
           <View style={styles.sourcesBox}>
             <View style={styles.sourcesTitleRow}>
-              <Ionicons name="link-outline" size={14} color="#93C5FD" />
+              <Ionicons name="link-outline" size={14} color="rgba(2,132,199,0.85)" />
               <Text style={styles.sourcesTitle}>Bağlantılar</Text>
             </View>
 
@@ -420,7 +410,7 @@ export default function ChatTab() {
                   style={styles.copyBtn}
                   activeOpacity={0.85}
                 >
-                  <Ionicons name="copy-outline" size={14} color="#E5E7EB" />
+                  <Ionicons name="copy-outline" size={14} color="rgba(15,23,42,0.70)" />
                   <Text style={styles.copyText}>Kopyala</Text>
                 </TouchableOpacity>
               </View>
@@ -434,23 +424,23 @@ export default function ChatTab() {
               disabled={feedbackDisabled}
               onPress={() => onLike(item.id)}
               style={[styles.iconBtn, feedbackDisabled && styles.iconBtnDisabled]}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
-              <Ionicons name="thumbs-up-outline" size={18} color="#E5E7EB" />
+              <Ionicons name="thumbs-up-outline" size={18} color="rgba(15,23,42,0.70)" />
             </TouchableOpacity>
 
             <TouchableOpacity
               disabled={feedbackDisabled}
               onPress={() => onDislikeOpen(item.id)}
               style={[styles.iconBtn, feedbackDisabled && styles.iconBtnDisabled]}
-              activeOpacity={0.8}
+              activeOpacity={0.85}
             >
-              <Ionicons name="thumbs-down-outline" size={18} color="#E5E7EB" />
+              <Ionicons name="thumbs-down-outline" size={18} color="rgba(15,23,42,0.70)" />
             </TouchableOpacity>
 
             {item.feedback && (
               <View style={styles.feedbackChip}>
-                <Ionicons name="checkmark-circle-outline" size={14} color="#34D399" />
+                <Ionicons name="checkmark-circle-outline" size={14} color="#16A34A" />
                 <Text style={styles.feedbackChipText}>Geri bildirim alındı</Text>
               </View>
             )}
@@ -465,18 +455,32 @@ export default function ChatTab() {
       <Stack.Screen
         options={{
           title: 'Kampüs Asistanı',
+          headerStyle: { backgroundColor: '#F8FAFC' },
+          headerShadowVisible: false,
+          headerTintColor: '#0F172A',
+          headerTitleStyle: { fontWeight: '700' },
+
+          // ✅ Sağ üstte logout (login temasındaki gibi “chip”)
           headerRight: () => (
-            <TouchableOpacity onPress={signOut} style={{ marginRight: 14 }} activeOpacity={0.85}>
+            <TouchableOpacity
+              onPress={async () => {
+                Alert.alert('Çıkış', 'Oturumu kapatmak istiyor musun?', [
+                  { text: 'İptal', style: 'cancel' },
+                  { text: 'Çıkış Yap', style: 'destructive', onPress: () => signOut() },
+                ]);
+              }}
+              style={{ marginRight: 14 }}
+              activeOpacity={0.85}
+            >
               <View style={styles.logoutBtn}>
-                <Ionicons name="log-out-outline" size={18} color="#E5E7EB" />
+                <Ionicons name="log-out-outline" size={18} color="rgba(15,23,42,0.75)" />
               </View>
             </TouchableOpacity>
           ),
-          headerStyle: { backgroundColor: '#070B14' },
-          headerTintColor: '#FFFFFF',
         }}
       />
 
+      {/* White background + subtle glows */}
       <View pointerEvents="none" style={styles.bg}>
         <View style={styles.glowTop} />
         <View style={styles.glowBottom} />
@@ -536,16 +540,14 @@ export default function ChatTab() {
                   return (
                     <Pressable
                       key={opt.key}
-                      onPress={() =>
-                        setSelectedReasons((prev) => ({ ...prev, [opt.key]: !prev[opt.key] }))
-                      }
+                      onPress={() => setSelectedReasons((prev) => ({ ...prev, [opt.key]: !prev[opt.key] }))}
                       style={[styles.optionRow, checked && styles.optionRowChecked]}
                     >
                       <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
                         <Ionicons
                           name={checked ? 'checkmark' : 'add'}
                           size={14}
-                          color={checked ? '#0B1220' : 'rgba(229,231,235,0.55)'}
+                          color={checked ? '#0F172A' : 'rgba(15,23,42,0.35)'}
                         />
                       </View>
                       <Text style={styles.optionText}>{opt.label}</Text>
@@ -569,7 +571,7 @@ export default function ChatTab() {
                   activeOpacity={0.85}
                 >
                   <Text style={styles.actionTextPrimary}>Gönder</Text>
-                  <Ionicons name="arrow-forward-outline" size={16} color="#0B1220" />
+                  <Ionicons name="arrow-forward-outline" size={16} color="#FFFFFF" />
                 </TouchableOpacity>
               </View>
             </Pressable>
@@ -579,13 +581,13 @@ export default function ChatTab() {
         {/* ✅ Composer */}
         <View
           onLayout={(e) => setComposerHeight(e.nativeEvent.layout.height)}
-  style={[styles.composerWrap, { paddingBottom: 10 }]}   // ✅ TAB ekranında 0 olmalı
+          style={[styles.composerWrap, { paddingBottom: 10 }]}
         >
           <View style={[styles.composer, inputFocused && styles.composerFocused]}>
             <Ionicons
               name={recording ? 'radio-outline' : 'chatbubble-ellipses-outline'}
               size={18}
-              color={recording ? '#FCA5A5' : '#9CA3AF'}
+              color={recording ? 'rgba(185, 28, 28, 0.80)' : 'rgba(15,23,42,0.45)'}
               style={{ marginLeft: 12 }}
             />
 
@@ -593,7 +595,7 @@ export default function ChatTab() {
               value={input}
               onChangeText={setInput}
               placeholder={recording ? 'Dinliyorum...' : 'Mesaj yaz...'}
-              placeholderTextColor="#94A3B8"
+              placeholderTextColor="rgba(15,23,42,0.35)"
               style={styles.input}
               multiline
               editable={!recording}
@@ -606,12 +608,12 @@ export default function ChatTab() {
                 onPress={sendTextMessage}
                 disabled={loading}
                 style={[styles.roundBtn, styles.roundBtnPrimary, loading && styles.roundBtnDisabled]}
-                activeOpacity={0.85}
+                activeOpacity={0.9}
               >
                 {loading ? (
-                  <ActivityIndicator size="small" color="#0B1220" />
+                  <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
-                  <Ionicons name="arrow-up" size={20} color="#0B1220" />
+                  <Ionicons name="arrow-up" size={20} color="#FFFFFF" />
                 )}
               </TouchableOpacity>
             ) : (
@@ -624,12 +626,12 @@ export default function ChatTab() {
                   recording ? styles.roundBtnDanger : styles.roundBtnBlue,
                   loading && styles.roundBtnDisabled,
                 ]}
-                activeOpacity={0.85}
+                activeOpacity={0.9}
               >
                 {loading ? (
-                  <ActivityIndicator size="small" color="#0B1220" />
+                  <ActivityIndicator size="small" color="#FFFFFF" />
                 ) : (
-                  <Ionicons name={recording ? 'mic' : 'mic-outline'} size={20} color="#0B1220" />
+                  <Ionicons name={recording ? 'mic' : 'mic-outline'} size={20} color="#FFFFFF" />
                 )}
               </TouchableOpacity>
             )}
@@ -641,9 +643,10 @@ export default function ChatTab() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#070B14' },
+  // ✅ Apple-like base
+  safe: { flex: 1, backgroundColor: '#F8FAFC' },
 
-  bg: { ...StyleSheet.absoluteFillObject, backgroundColor: '#070B14' },
+  bg: { ...StyleSheet.absoluteFillObject, backgroundColor: '#F8FAFC' },
   glowTop: {
     position: 'absolute',
     top: -160,
@@ -651,7 +654,7 @@ const styles = StyleSheet.create({
     width: 360,
     height: 360,
     borderRadius: 999,
-    backgroundColor: 'rgba(16,185,129,0.20)',
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
   },
   glowBottom: {
     position: 'absolute',
@@ -660,7 +663,7 @@ const styles = StyleSheet.create({
     width: 380,
     height: 380,
     borderRadius: 999,
-    backgroundColor: 'rgba(59,130,246,0.16)',
+    backgroundColor: 'rgba(34, 197, 94, 0.10)',
   },
 
   listContent: {
@@ -668,17 +671,25 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
 
+  // ✅ header right logout chip
   logoutBtn: {
     width: 34,
     height: 34,
     borderRadius: 12,
-    backgroundColor: 'rgba(17,24,39,0.72)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
     alignItems: 'center',
     justifyContent: 'center',
+
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 2,
   },
 
+  // ✅ bubbles (white + subtle borders, Apple-ish)
   bubble: {
     padding: 14,
     borderRadius: 18,
@@ -689,22 +700,30 @@ const styles = StyleSheet.create({
 
   userBubble: {
     alignSelf: 'flex-end',
-    backgroundColor: 'rgba(37,99,235,0.16)',
-    borderColor: 'rgba(147,197,253,0.25)',
+    backgroundColor: 'rgba(2, 132, 199, 0.10)', // calm blue tint
+    borderColor: 'rgba(2, 132, 199, 0.16)',
   },
 
   assistantBubble: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(17,24,39,0.78)',
-    borderColor: 'rgba(148,163,184,0.16)',
+    backgroundColor: '#FFFFFF',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
+
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 2,
   },
 
   bubbleText: {
-    color: '#FFFFFF',
-    fontSize: 15.8,
+    fontSize: 15.6,
     lineHeight: 21,
     marginTop: 8,
+    fontWeight: '500',
   },
+  userText: { color: '#0F172A' },
+  assistantText: { color: '#0F172A' },
 
   msgMetaRow: {
     flexDirection: 'row',
@@ -720,23 +739,32 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     borderWidth: 1,
+    backgroundColor: '#FFFFFF',
   },
   metaChipUser: {
-    backgroundColor: 'rgba(37,99,235,0.18)',
-    borderColor: 'rgba(147,197,253,0.30)',
+    borderColor: 'rgba(2, 132, 199, 0.16)',
+    backgroundColor: 'rgba(2, 132, 199, 0.08)',
   },
   metaChipAssistant: {
-    backgroundColor: 'rgba(16,185,129,0.14)',
-    borderColor: 'rgba(52,211,153,0.28)',
+    borderColor: 'rgba(22, 163, 74, 0.16)',
+    backgroundColor: 'rgba(22, 163, 74, 0.08)',
   },
-  metaChipText: {
-    color: '#E5E7EB',
+
+  metaChipTextUser: {
+    color: 'rgba(15,23,42,0.75)',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
+  metaChipTextAssistant: {
+    color: 'rgba(15,23,42,0.75)',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+
   metaTimeText: {
-    color: 'rgba(148,163,184,0.85)',
+    color: 'rgba(15,23,42,0.45)',
     fontSize: 12,
+    fontWeight: '500',
   },
 
   badgeRow: { marginTop: 10, flexDirection: 'row' },
@@ -747,22 +775,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(229,231,235,0.08)',
+    backgroundColor: 'rgba(15,23,42,0.04)',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15,23,42,0.08)',
   },
   emotionBadgeText: {
-    color: '#E5E7EB',
+    color: 'rgba(15,23,42,0.70)',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '600',
   },
 
+  // ✅ sources box (white card inside bubble)
   sourcesBox: {
     marginTop: 12,
     borderRadius: 14,
-    backgroundColor: 'rgba(2,6,23,0.55)',
+    backgroundColor: 'rgba(248, 250, 252, 0.85)',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.14)',
+    borderColor: 'rgba(15,23,42,0.08)',
     padding: 10,
   },
   sourcesTitleRow: {
@@ -772,21 +801,22 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   sourcesTitle: {
-    color: '#BFDBFE',
+    color: 'rgba(2,132,199,0.85)',
     fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.2,
+    fontWeight: '600',
+    letterSpacing: 0.1,
   },
   sourceRow: {
     paddingVertical: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(148,163,184,0.10)',
+    borderTopColor: 'rgba(15,23,42,0.06)',
   },
   linkText: {
-    color: '#93C5FD',
+    color: 'rgba(2,132,199,0.90)',
     textDecorationLine: 'underline',
     fontSize: 13,
     lineHeight: 16,
+    fontWeight: '500',
   },
   copyBtn: {
     marginTop: 6,
@@ -797,15 +827,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: 'rgba(17,24,39,0.78)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15,23,42,0.10)',
   },
   copyText: {
-    color: '#E5E7EB',
+    color: 'rgba(15,23,42,0.70)',
     fontSize: 12,
-    fontWeight: '700',
-    opacity: 0.9,
+    fontWeight: '600',
   },
 
   feedbackRow: {
@@ -818,9 +847,9 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 12,
-    backgroundColor: 'rgba(2,6,23,0.45)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -833,49 +862,62 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 999,
-    backgroundColor: 'rgba(16,185,129,0.10)',
+    backgroundColor: 'rgba(22, 163, 74, 0.08)',
     borderWidth: 1,
-    borderColor: 'rgba(52,211,153,0.20)',
+    borderColor: 'rgba(22, 163, 74, 0.16)',
   },
   feedbackChipText: {
-    color: '#D1FAE5',
+    color: 'rgba(15,23,42,0.70)',
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '600',
   },
 
+  // ✅ composer (white pill)
   composerWrap: {
     paddingHorizontal: 12,
     paddingTop: 10,
-    backgroundColor: 'rgba(7,11,20,0.72)',
+    backgroundColor: 'rgba(248,250,252,0.72)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(148,163,184,0.12)',
+    borderTopColor: 'rgba(15,23,42,0.08)',
   },
   composer: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     borderRadius: 18,
-    backgroundColor: 'rgba(17,24,39,0.72)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15,23,42,0.10)',
     paddingVertical: 10,
     paddingRight: 10,
+
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 3,
   },
   composerFocused: {
-    borderColor: 'rgba(52,211,153,0.40)',
-    backgroundColor: 'rgba(17,24,39,0.86)',
+    borderColor: 'rgba(2, 132, 199, 0.25)',
+    shadowColor: '#0284C7',
+    shadowOpacity: 0.10,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 4,
   },
   input: {
     flex: 1,
-    color: '#FFFFFF',
+    color: '#0F172A',
     fontSize: 15.5,
     lineHeight: 20,
     paddingHorizontal: 10,
     paddingVertical: 10,
     minHeight: 44,
     maxHeight: 120,
+    fontWeight: '500',
   },
 
+  // ✅ round action button (dark primary / blue mic)
   roundBtn: {
     width: 42,
     height: 42,
@@ -883,57 +925,66 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
+
     shadowColor: '#000',
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.10,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 10 },
-    elevation: 8,
+    elevation: 4,
   },
   roundBtnPrimary: {
-    backgroundColor: '#34D399',
-    borderColor: 'rgba(52,211,153,0.35)',
+    backgroundColor: '#0F172A',
+    borderColor: 'rgba(15,23,42,0.10)',
   },
   roundBtnBlue: {
-    backgroundColor: '#93C5FD',
-    borderColor: 'rgba(147,197,253,0.35)',
+    backgroundColor: 'rgba(2,132,199,0.90)',
+    borderColor: 'rgba(2,132,199,0.25)',
   },
   roundBtnDanger: {
-    backgroundColor: '#FCA5A5',
-    borderColor: 'rgba(252,165,165,0.35)',
+    backgroundColor: 'rgba(185,28,28,0.90)',
+    borderColor: 'rgba(185,28,28,0.20)',
   },
   roundBtnDisabled: { opacity: 0.55 },
 
+  // ✅ modal (white sheet)
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.62)',
+    backgroundColor: 'rgba(2,6,23,0.35)',
     justifyContent: 'flex-end',
   },
   modalCard: {
-    backgroundColor: 'rgba(17,24,39,0.96)',
+    backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 22,
     borderTopRightRadius: 22,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
     padding: 16,
+
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 16 },
+    elevation: 10,
   },
   modalHandle: {
     width: 46,
     height: 5,
     borderRadius: 999,
-    backgroundColor: 'rgba(148,163,184,0.35)',
+    backgroundColor: 'rgba(15,23,42,0.18)',
     alignSelf: 'center',
     marginBottom: 12,
   },
   modalTitle: {
-    color: '#FFFFFF',
+    color: '#0F172A',
     fontSize: 16.5,
-    fontWeight: '900',
+    fontWeight: '700',
   },
   modalSub: {
     marginTop: 6,
-    color: '#94A3B8',
+    color: 'rgba(15,23,42,0.60)',
     fontSize: 12.5,
     lineHeight: 16,
+    fontWeight: '500',
   },
   optionsWrap: { marginTop: 12 },
 
@@ -944,33 +995,33 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 12,
     borderRadius: 16,
-    backgroundColor: 'rgba(2,6,23,0.35)',
+    backgroundColor: 'rgba(248,250,252,0.90)',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.10)',
+    borderColor: 'rgba(15,23,42,0.08)',
     marginBottom: 10,
   },
   optionRowChecked: {
-    borderColor: 'rgba(52,211,153,0.35)',
-    backgroundColor: 'rgba(16,185,129,0.10)',
+    borderColor: 'rgba(2, 132, 199, 0.22)',
+    backgroundColor: 'rgba(2,132,199,0.08)',
   },
   checkbox: {
     width: 26,
     height: 26,
     borderRadius: 10,
-    backgroundColor: 'rgba(229,231,235,0.06)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15,23,42,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkboxChecked: {
-    backgroundColor: '#34D399',
-    borderColor: 'rgba(52,211,153,0.45)',
+    backgroundColor: 'rgba(2,132,199,0.14)',
+    borderColor: 'rgba(2,132,199,0.25)',
   },
   optionText: {
-    color: '#E5E7EB',
+    color: 'rgba(15,23,42,0.85)',
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
   },
 
   modalActions: {
@@ -992,20 +1043,20 @@ const styles = StyleSheet.create({
   },
   actionBtnGhost: {
     backgroundColor: 'transparent',
-    borderColor: 'rgba(148,163,184,0.20)',
+    borderColor: 'rgba(15,23,42,0.10)',
   },
   actionBtnPrimary: {
-    backgroundColor: '#34D399',
-    borderColor: 'rgba(52,211,153,0.35)',
+    backgroundColor: '#0F172A',
+    borderColor: 'rgba(15,23,42,0.10)',
   },
   actionTextGhost: {
-    color: '#94A3B8',
+    color: 'rgba(15,23,42,0.55)',
     fontSize: 13.5,
-    fontWeight: '800',
+    fontWeight: '600',
   },
   actionTextPrimary: {
-    color: '#0B1220',
+    color: '#FFFFFF',
     fontSize: 13.5,
-    fontWeight: '900',
+    fontWeight: '600',
   },
 });

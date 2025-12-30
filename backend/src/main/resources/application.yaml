@@ -48,6 +48,11 @@ app:
       test-mode: false
       max-items: 2000
       sleep-ms: 200
+    sabis:
+      birim-ids: "975,976"
+      timeout-ms: 15000
+      sleep-ms: 200
+      test-mode: false
   chroma:
     url: ${CHROMA_URL:http://localhost:8000}  # RAG (vektör veritabanı) için
 

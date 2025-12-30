@@ -44,7 +44,7 @@ export default function Login() {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email, password: password }),
+        body: JSON.stringify({ email, password }),
       });
 
       const data = await res.json();
@@ -53,13 +53,9 @@ export default function Login() {
       }
 
       const token = data.token;
-      if (!token) {
-        throw new Error('Sunucudan token alınamadı');
-      }
+      if (!token) throw new Error('Sunucudan token alınamadı');
 
       await signIn(token);
-
-      // ✅ Başarılı login -> chat'e geç (geri tuşu ile login'e dönmesin)
       router.replace('/(tabs)/chat');
     } catch (e: any) {
       setError(e.message || 'Bir hata oluştu');
@@ -72,7 +68,7 @@ export default function Login() {
     <SafeAreaView style={styles.safe}>
       <Stack.Screen options={{ title: 'Giriş Yap', headerShown: false }} />
 
-      {/* Arka plan “glow” katmanları */}
+      {/* White background + very subtle glow */}
       <View pointerEvents="none" style={styles.bg}>
         <View style={styles.glowTop} />
         <View style={styles.glowBottom} />
@@ -84,12 +80,10 @@ export default function Login() {
       >
         <View style={styles.header}>
           <View style={styles.logo}>
-            <Ionicons name="school-outline" size={22} color="#D1FAE5" />
+            <Ionicons name="school-outline" size={22} color="#0F172A" />
           </View>
           <Text style={styles.title}>Kampüs Asistanı</Text>
-          <Text style={styles.subtitle}>
-            SAÜ öğrencileri için hızlı bilgi ve destek.
-          </Text>
+          <Text style={styles.subtitle}>SAÜ öğrencileri için hızlı bilgi ve destek.</Text>
         </View>
 
         <View style={styles.card}>
@@ -100,13 +94,13 @@ export default function Login() {
             <Ionicons
               name="mail-outline"
               size={18}
-              color={emailFocused ? '#34D399' : '#9CA3AF'}
+              color={emailFocused ? '#0F172A' : 'rgba(15,23,42,0.45)'}
               style={styles.leftIcon}
             />
             <TextInput
               style={styles.input}
               placeholder="Email"
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor="rgba(15,23,42,0.35)"
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
@@ -122,13 +116,13 @@ export default function Login() {
             <Ionicons
               name="lock-closed-outline"
               size={18}
-              color={passwordFocused ? '#34D399' : '#9CA3AF'}
+              color={passwordFocused ? '#0F172A' : 'rgba(15,23,42,0.45)'}
               style={styles.leftIcon}
             />
             <TextInput
               style={styles.input}
               placeholder="Şifre"
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor="rgba(15,23,42,0.35)"
               value={password}
               onChangeText={setPassword}
               secureTextEntry={!showPassword}
@@ -145,7 +139,7 @@ export default function Login() {
               <Ionicons
                 name={showPassword ? 'eye-off-outline' : 'eye-outline'}
                 size={18}
-                color="#9CA3AF"
+                color="rgba(15,23,42,0.45)"
               />
             </Pressable>
           </View>
@@ -153,7 +147,7 @@ export default function Login() {
           {/* Error */}
           {error ? (
             <View style={styles.errorBox}>
-              <Ionicons name="alert-circle-outline" size={16} color="#FCA5A5" />
+              <Ionicons name="alert-circle-outline" size={16} color="#B91C1C" />
               <Text style={styles.errorText}>{error}</Text>
             </View>
           ) : null}
@@ -163,14 +157,14 @@ export default function Login() {
             style={[styles.button, !canSubmit && styles.buttonDisabled]}
             onPress={handleLogin}
             disabled={!canSubmit}
-            activeOpacity={0.85}
+            activeOpacity={0.9}
           >
             {loading ? (
-              <ActivityIndicator size="small" color="#0B1220" />
+              <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
                 <Text style={styles.buttonText}>Giriş Yap</Text>
-                <Ionicons name="arrow-forward-outline" size={18} color="#0B1220" />
+                <Ionicons name="arrow-forward-outline" size={18} color="#FFFFFF" />
               </>
             )}
           </TouchableOpacity>
@@ -182,26 +176,22 @@ export default function Login() {
             <View style={styles.divider} />
           </View>
 
-          <Text style={styles.footerHint}>
-            Giriş yaparak kullanım şartlarını kabul etmiş olursun.
-          </Text>
+          <Text style={styles.footerHint}>Giriş yaparak kullanım şartlarını kabul etmiş olursun.</Text>
         </View>
 
-        <Text style={styles.bottomNote}>
-          © {new Date().getFullYear()} Campus Assistant
-        </Text>
+        <Text style={styles.bottomNote}>© {new Date().getFullYear()} Campus Assistant</Text>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#070B14' },
+  // ✅ Apple-like white canvas
+  safe: { flex: 1, backgroundColor: '#F8FAFC' },
 
-  bg: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#070B14',
-  },
+  bg: { ...StyleSheet.absoluteFillObject, backgroundColor: '#F8FAFC' },
+
+  // ✅ ultra subtle glows (keep the feel, but not “neon”)
   glowTop: {
     position: 'absolute',
     top: -140,
@@ -209,7 +199,7 @@ const styles = StyleSheet.create({
     width: 320,
     height: 320,
     borderRadius: 999,
-    backgroundColor: 'rgba(16,185,129,0.22)',
+    backgroundColor: 'rgba(56, 189, 248, 0.12)', // sky
   },
   glowBottom: {
     position: 'absolute',
@@ -218,7 +208,7 @@ const styles = StyleSheet.create({
     width: 360,
     height: 360,
     borderRadius: 999,
-    backgroundColor: 'rgba(59,130,246,0.18)',
+    backgroundColor: 'rgba(34, 197, 94, 0.10)', // green
   },
 
   container: {
@@ -231,76 +221,93 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 18,
   },
+
+  // ✅ minimal logo chip
   logo: {
     width: 44,
     height: 44,
     borderRadius: 14,
-    backgroundColor: 'rgba(16,185,129,0.16)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(16,185,129,0.35)',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 10,
+
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 3,
   },
+
+  // ✅ lighter typography (less bold)
   title: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#FFFFFF',
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#0F172A',
     letterSpacing: 0.2,
   },
   subtitle: {
     marginTop: 6,
     fontSize: 13.5,
-    color: '#94A3B8',
+    color: 'rgba(15,23,42,0.60)',
     textAlign: 'center',
     lineHeight: 18,
   },
 
+  // ✅ white card, soft border, very light shadow
   card: {
-    backgroundColor: 'rgba(17,24,39,0.78)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
     padding: 18,
 
     shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 10,
+    shadowOpacity: 0.06,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 4,
   },
 
   cardTitle: {
-    color: '#E5E7EB',
-    fontSize: 14,
-    fontWeight: '700',
+    color: 'rgba(15,23,42,0.75)',
+    fontSize: 13,
+    fontWeight: '600',
     marginBottom: 14,
   },
 
+  // ✅ input: white surface + subtle focus ring
   inputWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(2,6,23,0.55)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.16)',
+    borderColor: 'rgba(15, 23, 42, 0.10)',
     marginBottom: 12,
     height: 52,
   },
   inputWrapFocused: {
-    borderColor: 'rgba(52,211,153,0.55)',
-    backgroundColor: 'rgba(2,6,23,0.72)',
+    borderColor: 'rgba(2, 132, 199, 0.35)', // calm blue focus
+    shadowColor: '#0284C7',
+    shadowOpacity: 0.10,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 2,
   },
-  leftIcon: {
-    paddingHorizontal: 14,
-  },
+  leftIcon: { paddingHorizontal: 14 },
+
   input: {
     flex: 1,
     height: 52,
-    color: '#FFFFFF',
+    color: '#0F172A',
     fontSize: 15.5,
     paddingRight: 10,
+    fontWeight: '500',
   },
+
   rightIconBtn: {
     paddingHorizontal: 14,
     height: 52,
@@ -308,6 +315,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
+  // ✅ calmer error (not too harsh)
   errorBox: {
     flexDirection: 'row',
     gap: 8,
@@ -315,22 +323,24 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 12,
-    backgroundColor: 'rgba(248,113,113,0.10)',
+    backgroundColor: 'rgba(185, 28, 28, 0.06)',
     borderWidth: 1,
-    borderColor: 'rgba(248,113,113,0.28)',
+    borderColor: 'rgba(185, 28, 28, 0.14)',
     marginBottom: 12,
   },
   errorText: {
     flex: 1,
-    color: '#FCA5A5',
+    color: 'rgba(185, 28, 28, 0.90)',
     fontSize: 13,
     lineHeight: 16,
+    fontWeight: '500',
   },
 
+  // ✅ primary button: Apple-like dark
   button: {
     height: 52,
     borderRadius: 14,
-    backgroundColor: '#34D399',
+    backgroundColor: '#0F172A',
     alignItems: 'center',
     justifyContent: 'center',
     flexDirection: 'row',
@@ -338,17 +348,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
 
     shadowColor: '#000',
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.12,
     shadowRadius: 18,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 8,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 6,
   },
-  buttonDisabled: {
-    opacity: 0.55,
-  },
+  buttonDisabled: { opacity: 0.45 },
   buttonText: {
-    color: '#0B1220',
-    fontWeight: '900',
+    color: '#FFFFFF',
+    fontWeight: '600',
     fontSize: 15.5,
     letterSpacing: 0.2,
   },
@@ -362,25 +370,28 @@ const styles = StyleSheet.create({
   divider: {
     flex: 1,
     height: 1,
-    backgroundColor: 'rgba(148,163,184,0.14)',
+    backgroundColor: 'rgba(15, 23, 42, 0.10)',
   },
   dividerText: {
-    color: '#94A3B8',
+    color: 'rgba(15,23,42,0.45)',
     fontSize: 12,
+    fontWeight: '500',
   },
 
   footerHint: {
     marginTop: 10,
-    color: '#94A3B8',
+    color: 'rgba(15,23,42,0.55)',
     fontSize: 12.5,
     lineHeight: 16,
     textAlign: 'center',
+    fontWeight: '500',
   },
 
   bottomNote: {
     marginTop: 14,
     textAlign: 'center',
-    color: 'rgba(148,163,184,0.65)',
+    color: 'rgba(15,23,42,0.40)',
     fontSize: 12,
+    fontWeight: '500',
   },
 });
